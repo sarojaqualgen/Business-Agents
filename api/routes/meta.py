@@ -40,9 +40,9 @@ def list_plans():
             "plan_id":         plan.plan_id,
             "plan_name":       plan.plan_name,
             "plan_type":       plan.plan_type.value,
-            "blackout_active": plan.blackout_active,
-            "loan_feature":    plan.loan_feature,
-            "hardship_feature": plan.hardship_feature,
+            "blackout_active": plan.blackout_status.is_active,
+            "loans_permitted": plan.loan_policy.loans_permitted,
+            "hardship_permitted": plan.hardship_policy.hardship_permitted,
         })
     return {"count": len(result), "plans": result}
 
