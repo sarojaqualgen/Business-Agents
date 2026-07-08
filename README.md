@@ -83,18 +83,42 @@ Every transaction is checked against all 12 rules in order. Fail any one → den
 
 ---
 
-## Setup
+## Getting Started
+
+### Prerequisites
+
+- Python 3.11+
+- An [Anthropic API key](https://console.anthropic.com/)
+
+### Clone and run
 
 ```bash
+# 1. Clone the repo
+git clone https://github.com/sarojaqualgen/Business-Agents.git
+cd Business-Agents
+
+# 2. Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate        # Mac / Linux
+# .venv\Scripts\activate         # Windows
+
+# 3. Install dependencies
 pip install -r requirements.txt
+
+# 4. Set up environment variables
 cp .env.example .env
-# Set ANTHROPIC_API_KEY and FAP_JWT_SECRET in .env
 ```
 
-## Running the CLI
+Open `.env` and fill in:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...     # your Anthropic API key
+FAP_JWT_SECRET=change-me-in-prod # any long random string for dev
+```
+
+### Run the CLI
 
 ```bash
-source .venv/bin/activate
 python demo/crew_cli.py
 ```
 
