@@ -1,0 +1,32 @@
+METRO GENERAL HOSPITAL
+1200 Medical Center Drive, Chicago, IL 60601
+Phone: (312) 555-0100  |  EIN: 36-1234567
+
+PATIENT BILLING STATEMENT
+─────────────────────────────────────────────────────
+Patient:         Amara Osei
+Date of Service: 2026-05-14
+Account #:       MGH-2026-088341
+Insurance:       Blue Cross Blue Shield (BCBS)
+─────────────────────────────────────────────────────
+
+SERVICE DETAILS:
+
+05/14/2026  Emergency Room Visit                   $3,200.00
+05/14/2026  CT Scan — Abdomen/Pelvis               $1,850.00
+05/14/2026  Laboratory Services (CBC, CMP)           $420.00
+05/14/2026  IV Medication Administration             $380.00
+
+                              Gross Charges:       $5,850.00
+                              Insurance Paid:      $3,200.00
+                              Adjustments:           $785.00
+                              ─────────────────────────────
+                              PATIENT BALANCE DUE: $1,865.00
+
+DIAGNOSIS: Acute abdominal pain (ICD-10: R10.9)
+ATTENDING PHYSICIAN: Dr. Sarah Williams, MD
+
+Payment due within 30 days. Financial hardship assistance available.
+For billing questions: billing@metrogeneral.org
+─────────────────────────────────────────────────────
+This is an official billing statement from Metro General Hospital.

@@ -1,0 +1,28 @@
+# Environment — never commit secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Runtime state — these are generated at runtime, not source
+data/document_store.json
+data/review_queue_state.json
+
+# macOS
+.DS_Store
+
+# IDE / Claude Code
+.claude/
+
+# pytest
+.pytest_cache/
+
+# Alembic compiled
+*.pyc
