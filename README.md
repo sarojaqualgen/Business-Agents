@@ -67,8 +67,8 @@ Every transaction is checked against all 12 rules in order. Fail any one → den
 | Level | Meaning | Examples |
 |---|---|---|
 | `full` | Execute immediately | Deferral increase, rebalance to QDIA, address update |
-| `supervised` | Participant must type `confirm` | Loan initiation, deferral to 0% |
-| `human_review` | Plan sponsor must approve | Hardship, QDRO, separation distribution, RMD |
+| `supervised` | Participant confirms → bank details if funds move | Loan initiation (confirm → disburse), deferral to 0% (confirm → done) |
+| `human_review` | Sponsor approves → bank details if funds move | Hardship/in-service (approve → participant provides bank details), beneficiary/QDRO (approve → done) |
 
 ---
 
@@ -143,7 +143,7 @@ pytest tests/ -v
 | 1 — Core Engine | Done | Pydantic v2 models, 12-rule FAP engine, mock data, tests, demo |
 | 2 — Data Layer | Done | PostgreSQL schema, `data/db.py`, Alembic migrations |
 | 3 — CrewAI + LLM | Done | CrewAI crews, Claude claude-sonnet-4-6, interactive CLI |
-| 4 — FastAPI API | Pending | REST endpoints (web portal calls these) |
+| 4 — FastAPI API | Done | REST endpoints with SSE streaming, auth, document upload, queue and admin endpoints |
 | 5 — Recordkeeper | Pending | SFTP/API nightly sync from Fidelity/Vanguard/Empower |
 | 6 — Production | Pending | Redis tokens, PII encryption, DOL compliance audit |
 
@@ -173,6 +173,7 @@ pytest tests/ -v
 |---|---|
 | [CLI_GUIDE.md](CLI_GUIDE.md) | Every CLI option, all 10 actions, confirm/cancel flow, error messages |
 | [DEMO_GUIDE.md](DEMO_GUIDE.md) | 8 scripted demo scenarios for presentations |
+| [SWAGGER_GUIDE.md](SWAGGER_GUIDE.md) | Step-by-step guide to testing every API endpoint via Swagger UI |
 | [TESTING.md](TESTING.md) | Test architecture, rule-by-rule breakdown, mock data reference |
 | [WORKFLOW2.md](WORKFLOW2.md) | Full architecture spec — agents, tasks, tools, data flow |
 | [CLAUDE.md](CLAUDE.md) | Project context and critical rules for Claude Code sessions |

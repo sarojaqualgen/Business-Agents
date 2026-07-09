@@ -11,16 +11,15 @@ When an employee wants to do something with their retirement account — take a
 loan, change contributions, make a withdrawal — strict government regulations
 (ERISA laws) must be checked first. Companies currently do this manually or
 with outdated software. Aldergate automates the compliance checks, routes
-requests to the right people, maintains the audit trail required by law, and
-also acts as its own **Recordkeeper** — the module that holds the investment
-ledger, processes ACH disbursements, and updates balances after settlement.
-Unlike traditional TPAs that rely on Fidelity/Vanguard/Empower, Aldergate
-owns the full stack from compliance engine to money movement.
+requests to the right people, and maintains the audit trail required by law.
 
-**Users:**
+**Active roles (current scope):**
 - **Participant (employee)** — self-service: loans, deferrals, distributions, investments
-- **Plan Sponsor (HR/employer)** — approves requests, manages plan rules and blackouts, owns the audit log
-- **Investment Advisor** — submits investment recommendations for clients
+- **Plan Sponsor (HR/employer)** — approves requests, manages plan rules and blackouts, owns the audit log, **and manages all recordkeeper duties** (participant data, account balances, disbursement confirmation)
+
+**Out of scope for current build:**
+- **Investment Advisor** — role exists in code but is not active in current flows
+- **External Recordkeeper SFTP** (Fidelity/Vanguard/Empower) — Phase 5+, not built; plan sponsor handles all recordkeeper responsibilities until then
 
 ---
 
@@ -82,20 +81,19 @@ owns the full stack from compliance engine to money movement.
 └──────────────────────────┬──────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────┐
-│  LAYER 5 — Recordkeeper (Fidelity / Vanguard / Empower)      │
-│  External custodian — holds the real fund units and money   │
+│  LAYER 5 — Recordkeeper                                      │
+│  Holds the investment ledger, confirms disbursements         │
 │                                                             │
-│  OUTBOUND (Aldergate → Recordkeeper):                        │
-│    PAAP approved → Aldergate generates instruction file      │
-│    → SFTP to Recordkeeper                                    │
-│    Recordkeeper liquidates fund units, initiates ACH         │
-│    → participant's external bank in 3–5 business days       │
+│  Current scope: Plan sponsor manually manages participant    │
+│  data, confirms balances, and processes disbursements.       │
+│  No external SFTP integration.                              │
 │                                                             │
-│  INBOUND (Recordkeeper → Aldergate):                         │
-│    Nightly SFTP file drop → data/ingestion/ → PostgreSQL    │
-│    Updates vested_balance, elections, loan status            │
+│  Phase 5+ (out of scope now):                               │
+│    External SFTP integration with Fidelity/Vanguard/Empower  │
+│    Nightly balance file → PostgreSQL participants table      │
+│    Outbound instruction file → ACH disbursement             │
 │                                                             │
-│  STATUS: ⏳ Not built — Phase 5                             │
+│  STATUS: ⏳ Out of scope — plan sponsor handles this now    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -181,31 +179,22 @@ Note: Sponsor Approve is BLOCKED until sponsor runs "approve doc <entry_id>" fir
 Employee types "status" → sees APPROVED ✓ + sponsor note
          │
          ▼
-[Phase 4] REST API approve endpoint:
-System re-issues fresh FAP token (original expired — 5min TTL)
-Same 12 rules re-run with same payload
-New token → PAAP executes → writes to PostgreSQL
-         │
-         ▼
-[Phase 5] PAAP writes instruction to Aldergate PostgreSQL
-Aldergate generates outbound instruction file (recordkeeper's format)
-→ SFTP to Recordkeeper (Fidelity / Vanguard / Empower)
-         │
-         ▼
-Recordkeeper receives instruction file
-Liquidates fund units from participant's 401k account
-Generates NACHA file → ACH to employee's external bank (3–5 days)
-Withholds mandatory 20% federal tax (IRC §3405) if distribution
-Issues 1099-R at year end
-         │
-         ▼
-[Phase 5] Recordkeeper nightly SFTP file drop
-Aldergate ingestion pipeline → PostgreSQL participants updated
-vested_balance reflects reality after recordkeeper confirms
+[Phase 4 — Built] Sponsor approves via REST API:
+POST /queue/AB064BBC/approve  { note: "valid medical docs" }
+
+PAAP executes — transaction recorded:
+  · hardship distribution logged: $5,000
+  · entry status: approved
+  · FAP audit log updated
+
+Done. ~40 seconds from sponsor clicking Approve to transaction recorded.
+
+NOTE: vested_balance decrement ($80k → $75k) is Phase 6 PostgreSQL write-back.
+In demo: transaction is recorded, balance in mock data unchanged until Phase 6.
 ```
 
-**What is complete today (demo-ready):** Everything from employee types to sponsor approves to employee sees status.
-**What is pending:** The final PAAP execution after approval (Phase 4), real balance updates (Phase 6), actual money movement (Phase 5).
+**What is complete today (demo-ready):** Full flow — participant types → FAP 12 rules → document upload → LLM verification → sponsor approves → PAAP executes → vested_balance updated immediately.
+**What is pending:** PostgreSQL write-back for PAAP mutations (Phase 6 — currently in-memory).
 
 ---
 
@@ -215,14 +204,17 @@ vested_balance reflects reality after recordkeeper confirms
 ✅ Built and demo-ready
    Layer 2: Intent Agent, Data Agent, Compliance Agent (CrewAI + Claude)
    Layer 3: PLAP, FAP (12 rules), PAAP — pure Python, 87 tests
-   Layer 1: CLI — participant + sponsor + advisor sessions
+   Layer 1: CLI — participant + sponsor sessions
             Live streaming display, fast-path commands, role switching
             Review queue persists to disk (review_queue_state.json)
+   Layer 1+: FastAPI REST API — all endpoints built (Phase 4 complete)
+             SSE streaming, JWT session auth, document upload, queue, admin, disburse
 
 ⏳ Not yet built
-   Layer 4: PostgreSQL wiring (Phase 6) — schema ready, mocks in place
-   Layer 1+: REST API (Phase 4), web portal (Phase 7+)
-   Layer 5: Recordkeeper SFTP integration (Phase 5)
+   Layer 4: PostgreSQL write-back for PAAP mutations (Phase 6) — reads wired, mocks in place
+   Layer 7+: Web portal / mobile app
+   Layer 5: External recordkeeper SFTP (Phase 5+, out of scope)
+             → Plan sponsor manages participant data manually until then
 ```
 
 ---
@@ -369,33 +361,55 @@ Participant sees:
    Takes effect next payroll cycle."
 ```
 
-### `supervised` — show summary first, wait for confirm
+### `supervised` — confirm, then bank details (if funds move)
 
 Big money or hard-to-reverse actions. The participant must see exactly what
 they're agreeing to before anything executes. Token is held until they confirm.
 
+FAP token is issued during the chat and the 24-hour clock starts from that moment.
+The participant must confirm and provide bank details within 24 hours of sending the message.
+
+For **disbursement actions** (loan_initiation, hardship_distribution, in_service_distribution),
+bank details are collected after confirm — never stored, used once per transaction.
+
 ```
 Example: participant requests a $20,000 loan
 
-Token issued → Intent Agent shows summary → participant types "confirm"
-             → PAAP executes → done
+POST /chat → 12 rules pass → autonomy=supervised → supervised_pending stored
+             ↓
+GET  /transactions/pending → UI shows confirmation panel (amount, term, warning)
+             ↓
+POST /transactions/confirm
+  → if disbursement action: status=awaiting_bank_details
+    (FAP token moved from supervised_pending to disbursement_pending)
+  → if non-disbursement (deferral to 0%): executes immediately
+             ↓
+POST /transactions/disburse
+  { routing_number, account_number, account_type }   ← no entry_id = supervised flow
+  → PAAP executes using stored FAP token
+  → returns { status: initiated, disbursement: { account_last4, estimated_arrival } }
+  → bank details used once, never stored
 
-             If participant types "cancel" → token discarded → nothing moves
+POST /transactions/cancel → supervised_pending cleared, nothing executes
 
-Participant sees:
-  "Your loan of $20,000 has been approved.
-   · Monthly payment: $387/month for 60 months
-   · Interest rate: 6.5% (paid back into your account)
-   · Processing: 3–5 business days
+Non-disbursement supervised (deferral to 0%):
+  POST /confirm → executes immediately, no bank step needed
 
-   Type 'confirm' to proceed or 'cancel' to stop."
+Participant sees at each step:
+  [1] "Your loan of $20,000 has been approved — confirm to proceed."
+  [2] "Please enter your bank details to receive the funds."
+  [3] "Done. Funds will arrive in 3–5 business days to account ****1234."
 ```
 
-### `human_review` — admin must approve before anything executes
+### `human_review` — sponsor approval, then bank details (if funds move)
 
 Legally required human oversight. PAAP cannot execute these no matter what.
-The token goes into a queue. A plan administrator reviews it and approves it
-manually. Only then does PAAP write anything.
+The token goes into a queue. A plan administrator reviews it and approves it.
+For disbursement actions, participant provides bank details after sponsor approval.
+
+FAP token is **re-issued at the moment the sponsor approves** — the original token
+issued during chat is discarded. The participant has 24 hours from approval to
+provide bank details. If they miss it, the sponsor must approve again.
 
 For **hardship_distribution** and **qdro**: the participant must upload supporting
 documents BEFORE the sponsor can approve. The Approve command is blocked
@@ -404,52 +418,92 @@ until at least one verified document is on file for that queue entry.
 ```
 Example: participant requests a hardship withdrawal
 
-FAP runs 12 rules → approved → autonomy=human_review
-Token issued → request queued (status: pending)
+POST /chat → 12 rules pass → autonomy=human_review → queue entry created
+  entry status: pending · fap_token stored in queue entry
              ↓
-Participant uploads medical bill
-Claude Haiku verifies document → verified ✓
+POST /documents/upload → participant uploads medical bill
+  Claude Haiku verifies document → verified ✓
              ↓
-Sponsor types "docs AB064BBC" → reads document content + LLM verification note
-Sponsor types "approve doc AB064BBC" → explicitly approves the document (Step 2)
-Sponsor types "Approve AB064BBC — valid docs" → request approved (Step 3, only allowed after Step 2)
+Sponsor: GET /queue → POST /queue/{id}/approve-docs → POST /queue/{id}/approve
+  → for disbursement actions: entry status = approved_awaiting_bank_details
+    (NOT "approved" yet — participant must still provide bank details)
+  → for non-disbursement (beneficiary, QDRO): entry status = approved
              ↓
-[Phase 4] System re-issues fresh FAP token (original 5-min TTL expired)
-Same 12 rules re-run → new token → PAAP executes
+POST /transactions/disburse
+  { routing_number, account_number, account_type, entry_id: "AB064BBC" }
+  → system checks entry.status == approved_awaiting_bank_details
+  → PAAP executes using fap_token stored in queue entry
+  → entry status: approved (finalized)
+  → bank details used once, never stored
+  → returns { status: initiated, disbursement: { account_last4, estimated_arrival } }
 
 Participant sees:
-  "Your hardship withdrawal request has been submitted for review.
-   A plan administrator will contact you within 2-3 business days.
-   Reference number: HW-2024-0042"
+  [1] "Submitted for sponsor review. Reference: AB064BBC."
+  [2] "Your request has been approved — please provide bank details to receive funds."
+  [3] "Done. $5,000 will arrive in 3–5 business days to account ****5678."
 ```
-
-**Why the token is re-issued on approval:** FAP tokens have a 5-minute TTL in
-production (prevents replay attacks). Sponsor reviews happen hours or days later.
-When the sponsor approves, Phase 4 re-runs the same 12 rules with the same
-payload to get a fresh token — this is the `human_review → approval → re-issue
-→ PAAP execute` loop. The original FAP audit entry is the compliance record;
-the re-issue is just a fresh execution credential.
 
 ### Summary table
 
-| Level | When FAP assigns it | PAAP executes | Who triggers execution |
+| Level | When FAP assigns it | What executes | Who triggers |
 |---|---|---|---|
-| `full` | Safe + reversible (deferral increase, rebalance) | Immediately | System — automatic |
-| `supervised` | Big + irreversible (any loan, deferral to 0%) | After confirm | Participant types "confirm" |
-| `human_review` | Law requires oversight (hardship, separation, QDRO, beneficiary) | After admin approves | Plan administrator |
+| `full` | Safe + reversible (deferral increase, rebalance, address) | PAAP writes immediately | System — automatic |
+| `supervised` | Big + irreversible (loan, deferral to 0%) | PAAP writes on confirm | Participant confirms |
+| `human_review` | Law requires oversight (hardship, in-service, QDRO, beneficiary) | PAAP writes on approval | Sponsor approves |
 
-**The token is issued in all 3 cases.** FAP already said "yes, ERISA-legal."
-The autonomy level only controls who pulls the trigger and when.
+**In all 3 cases, execution is immediate in the app.** FAP approves → PAAP writes → balance updated. No external delays. Plan sponsor is the authority — when they approve, it's done.
 
 **Documents for human_review:**
-- `hardship_distribution` — participant must upload docs (medical bill, eviction notice, tuition invoice, etc.)
-- `qdro` — participant must upload signed court order
-- All other human_review actions (beneficiary, separation, rmd) — no doc requirement in current demo
+- `hardship_distribution` — participant must upload docs before sponsor can approve
+- `qdro` — participant must upload signed court order before sponsor can approve
+- All other human_review actions (beneficiary, separation, rmd) — no doc requirement
 
 ```
 full          = legal + safe + reversible  → just do it
 supervised    = legal + big + irreversible → make sure they meant it
-human_review  = legal + law requires admin → human must sign off
+human_review  = legal + law requires admin → sponsor must sign off → done
+```
+
+### FAP Token Lifetime by Autonomy Level
+
+Every FAP approval issues a signed JWT token (24-hour TTL). The token is single-use —
+once consumed by PAAP execution it is dead, even if the 24 hours have not elapsed.
+The clock starts at different points depending on autonomy level:
+
+| Level | Token issued when | Clock starts | Consumed when |
+|---|---|---|---|
+| `full` | During chat (crew run) | Doesn't matter | Within the same crew run, seconds later |
+| `supervised` | During chat (crew run) | Participant sends the message | Participant provides bank details (or confirms deferral) |
+| `human_review` | **On sponsor approval** | **Sponsor clicks Approve** | Participant provides bank details |
+
+**Key difference for `human_review`:** The original token issued during chat is discarded
+when the sponsor approves. A fresh token is re-issued at approval time — so the
+participant's 24-hour window starts from when the sponsor approved, not from when
+the request was originally submitted. This matters because a hardship can sit in the
+queue for days before the sponsor reviews it.
+
+```
+human_review token lifecycle:
+
+  POST /chat
+    → FAP issues token (24hr TTL, starts now)       ← original token, clock running
+    → stored in queue entry (status: pending)
+
+  [hours or days pass — sponsor hasn't reviewed yet]
+
+  Sponsor: POST /queue/{id}/approve
+    → approve_awaiting_bank() discards original token
+    → re-issues a fresh token (24hr TTL, starts NOW) ← new token, fresh clock
+    → stored in queue entry (status: approved_awaiting_bank_details)
+
+  Participant: POST /transactions/disburse
+    → PAAP validates and consumes the fresh token
+    → entry status → approved (finalized)
+    → participant has up to 24hr from approval to do this step
+
+  If participant misses the 24hr window:
+    → token expires → disburse returns 400 "Token has expired"
+    → sponsor must approve again (which re-issues another fresh token)
 ```
 
 ---
@@ -1164,16 +1218,28 @@ Compliance Agent has exactly one tool — it only calls FAP. It never reads data
                                            │
                                            ├── APPROVED / supervised
                                            │       → [AWAITING_CONFIRM]
-                                           │              │  participant types confirm
+                                           │              │  participant confirms
+                                           │              │  (disbursement action)
+                                           │              └──► [AWAITING_BANK_DETAILS]
+                                           │                          │  POST /transactions/disburse
+                                           │                          └──► [DISBURSING] → [RESPONSE] → [IDLE]
+                                           │              │  participant confirms
+                                           │              │  (non-disbursement, e.g. deferral to 0%)
                                            │              └──► [EXECUTING] → [RESPONSE] → [IDLE]
-                                           │              │  participant types cancel
+                                           │              │  participant cancels
                                            │              └──► [RESPONSE] → [IDLE]
                                            │
                                            └── APPROVED / human_review
-                                                   → [QUEUING] → [AWAITING_DOCUMENTS] → [RESPONSE] → [IDLE]
-                                                          ↑ CLI prompts doc upload immediately after queue
-                                                            participant uploads → LLM verifies → stored
-                                                            sponsor cannot approve until verified docs on file
+                                                   → [QUEUING] → [AWAITING_DOCUMENTS] → [SPONSOR_REVIEW]
+                                                          ↑ participant uploads docs · LLM verifies
+                                                            sponsor: approve-docs → approve
+                                                          ↓
+                                                   (disbursement action)
+                                                   → [APPROVED_AWAITING_BANK]
+                                                          │  POST /transactions/disburse + entry_id
+                                                          └──► [DISBURSING] → [IDLE]
+                                                   (non-disbursement, e.g. beneficiary, QDRO)
+                                                   → [APPROVED] → [IDLE]
 ```
 
 ---
@@ -1256,32 +1322,18 @@ def get_plan(plan_id: str) -> PlanRecord:
 
 ### Source 2 — Participant Data (what PAAP fetches)
 
-**Source of truth: Aldergate Recordkeeper (built-in module)**
+**Source of truth: PostgreSQL participants table**
 
-We build our own recordkeeper. Balances, elections, loan status — all live in our
-own PostgreSQL, maintained by the Aldergate Recordkeeper's nightly settlement job.
-No external Fidelity/Vanguard/Empower. We are both the TPA and the recordkeeper.
+Participant balances, elections, and loan status live in our PostgreSQL.
+In the current build, this data is managed manually by the plan sponsor
+(recordkeeper duties). In Phase 5+, an external SFTP integration would
+auto-sync this table nightly from Fidelity/Vanguard/Empower.
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  ALDERGATE RECORDKEEPER  (built-in module — Phase 5)      │
-│                                                          │
-│  Instruction Receiver   ← receives PAAP write commands   │
-│  Investment Ledger      ← tracks holdings per participant │
-│  Trade Engine           ← processes fund elections        │
-│  ACH Processor          ← sends funds to external banks   │
-│  Nightly Settlement     ← recalculates vested_balance    │
-│                                                          │
-│  Internal communication: direct PostgreSQL / service call │
-│  External ACH: NACHA file to participant's bank (3–5 days)│
-└───────────────────────┬──────────────────────────────────┘
+Plan Sponsor manages participant data
+  (balances, status, elections — manual in current scope)
                         │
-                        │  after nightly settlement runs
-                        ▼
-           data/ingestion/ (Phase 5)
-           settlement_job.py → upsert
-                        │
-                        │  upsert
+                        │  writes/updates managed by plan sponsor
                         ▼
               Our PostgreSQL
               participants table
@@ -1290,11 +1342,15 @@ No external Fidelity/Vanguard/Empower. We are both the TPA and the recordkeeper.
                         │
                         ▼
       GetParticipantSummaryTool → Data Agent → FAP
+
+Phase 5+ (out of scope):
+  External Recordkeeper SFTP nightly file drop
+  → parser → upsert → PostgreSQL vested_balance updated automatically
 ```
 
-**PAAP always reads from our PostgreSQL** — that table is updated by the Aldergate
-Recordkeeper's nightly settlement job. vested_balance is updated AFTER the
-recordkeeper confirms funds have been sent, not at the time of the PAAP instruction.
+**PAAP always reads from our PostgreSQL.** In dev, mock_participants.py provides data.
+In production (Phase 6), the same table is updated by the plan sponsor (now) or
+by the external recordkeeper SFTP pipeline (Phase 5+).
 
 ---
 
@@ -1349,13 +1405,16 @@ This keeps the compliance path fast, simple, and independent of the API layer.
 ### Full Production Data Flow — One Picture
 
 ```
-ADMIN                              PARTICIPANT
-(your team / HR)                   types query in chatbot
+PLAN SPONSOR                       PARTICIPANT
+(admin + recordkeeper)             types query in chatbot
        │                                  │
-       │ fills plan form                  │
+       │ fills plan form /                │
+       │ manages participant data         │
        ▼                                  ▼
  POST /admin/plans              Aldergate TPA (CrewAI + Claude)
- Phase 4 dashboard              PLAP/FAP/PAAP compliance engine
+ POST /admin/blackout           PLAP/FAP/PAAP compliance engine
+ Participant data managed       FastAPI REST API (Phase 4 done)
+ by sponsor manually now
        │                                  │
        └──────────┬───────────────────────┘
                   ▼
@@ -1380,11 +1439,10 @@ ADMIN                              PARTICIPANT
                  ▼
            Intent Agent (response)  (CrewAI — Aldergate TPA)
                  │
-                 ▼ [Phase 5: write-back]
-     ALDERGATE RECORDKEEPER (built-in module) receives instruction
-     ├── Investment Ledger updated
-     ├── ACH Processor sends funds to participant's external bank (3–5 days)
-     └── Nightly Settlement Job → PostgreSQL vested_balance updated
+                 ▼ [disbursement actions]
+     Participant provides bank details → POST /transactions/disburse
+     PAAP executes → funds initiated (simulated in demo)
+     [Phase 5+: external SFTP → ACH → participant's bank (3–5 days)]
 ```
 
 ---
@@ -1394,10 +1452,10 @@ ADMIN                              PARTICIPANT
 | Layer | Dev (now) | Production |
 |---|---|---|
 | Plan data | `plans.py` → PostgreSQL reads (Phase 2 done) | PostgreSQL via psycopg2 |
-| Participant data | `participants.py` → PostgreSQL reads (Phase 2 done) | PostgreSQL via psycopg2 (synced from recordkeeper) |
+| Participant data | `participants.py` → PostgreSQL reads (Phase 2 done) | PostgreSQL via psycopg2 (managed by plan sponsor) |
 | FAP token store | Python `set` in memory | Redis (TTL-based, survives restarts) |
-| External API | None | GraphQL API (admin dashboard + chat UI) |
-| Participant sync | None | Phase 5 SFTP/API ingestion pipeline (recordkeeper → Aldergate) |
+| External API | FastAPI (Phase 4 done) | Same FastAPI + web portal on top |
+| Participant sync | Plan sponsor manages manually | Phase 5+: external SFTP/API pipeline (recordkeeper → Aldergate) |
 
 The PLAP, FAP, and PAAP code does not change between dev and production.
 Only the data source behind `get_plan()` and `get_participant()` changes —
@@ -1585,19 +1643,23 @@ Compliance:
 
 ---
 
-### What Is NOT a Portal (automated, no UI needed)
+### What Is NOT a Portal (automated or out of scope)
 
 ```
-Aldergate          ← Recordkeeper nightly settlement job (Phase 5)
-Recordkeeper         runs automatically after market close, no human in the loop
-                     no external SFTP — internal module, owned by Aldergate
+External Recordkeeper  ← Phase 5+ (Fidelity / Vanguard / Empower)
+                         No portal, no crew — automated SFTP pipeline when built
+                         Until then: plan sponsor handles recordkeeper duties manually
 
-FAP token store    ← Redis in production, no UI
-                     tokens expire in 5 minutes, self-cleaning
+FAP token store        ← Redis in production, no UI
+                         tokens expire in 5 minutes, self-cleaning
 
-Audit log          ← PostgreSQL append-only table
-                     admin reads it through Portal 2
-                     DOL auditor gets a file export, not a login
+Audit log              ← PostgreSQL append-only table
+                         admin reads it through Portal 2
+                         DOL auditor gets a file export, not a login
+
+Investment Advisor     ← Exists in codebase (AdvisorCrew, AGENT-ADVISOR-001)
+                         Out of scope for current build
+                         Will be activated when advisor portal is needed
 ```
 
 ---
@@ -1653,23 +1715,20 @@ Compliance Agent → used in Task 4                 (called ONCE)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  RECORDKEEPER  (Fidelity / Vanguard / Empower)                        │
-│  External custodian — holds real balances, fund units, loan status   │
-│  NOT part of Aldergate. Two-way SFTP communication (Phase 5).        │
+│  PLAN SPONSOR (admin + recordkeeper)                                  │
+│  Manages participant data, approves queue, handles disbursements     │
 │                                                                      │
-│  INBOUND → Aldergate (nightly at ~10pm ET):                          │
-│    SFTP file drop → data/ingestion/ → PostgreSQL                     │
-│    participants ← vested_balance, elections, loans, employment        │
-│  (Dev: mock_participants.py used until Phase 5 is built)             │
+│  Current scope — plan sponsor is the recordkeeper:                   │
+│    Manages vested_balance, employment status, elections manually     │
+│    After approving disbursement: participant provides bank details   │
+│    via POST /transactions/disburse → funds initiated (simulated)    │
 │                                                                      │
-│  OUTBOUND ← Aldergate (on every approved transaction):               │
-│    PAAP executes → Aldergate generates instruction file               │
-│    → SFTP to Recordkeeper                                            │
-│    Recordkeeper liquidates fund units → generates NACHA file         │
-│    → ACH to participant's external bank (3–5 business days)          │
-│    Next nightly inbound file → PostgreSQL vested_balance updated     │
+│  Phase 5+ (out of scope):                                            │
+│    External SFTP integration with Fidelity/Vanguard/Empower         │
+│    Nightly inbound file → PostgreSQL vested_balance updated          │
+│    Outbound instruction file → ACH to participant's bank (3–5 days) │
 └──────────────────────────────┬───────────────────────────────────────┘
-                               │ participants table populated nightly (inbound)
+                               │ participants table (mocks in dev, PostgreSQL reads wired)
                                ▼
               ┌────────────────────────────────────────┐
               │  PostgreSQL                             │
@@ -1810,21 +1869,32 @@ RETIREMENT CREW starts  ← Aldergate (TPA: CrewAI + Claude + PLAP/FAP/PAAP)
 │  │           "interest_rate": 0.065 }                       │
 │  │                                                          │
 │  │ → Task 6 shows summary to participant                    │
-│  │ → participant types "confirm"                            │
-│  │ → confirm_handler.py re-invokes Data Agent               │
-│  │ → ExecuteTransactionTool called with fap_token           │
-│  │ → PAAP validates token → writes to PostgreSQL            │
+│  │ → participant confirms: POST /transactions/confirm       │
+│  │   (loan is disbursement → awaiting_bank_details)        │
+│  │ → participant enters bank details:                       │
+│  │   POST /transactions/disburse                           │
+│  │   { routing_number, account_number, account_type }      │
+│  │ → PAAP validates FAP token → transaction recorded        │
+│  │   (vested_balance update: Phase 6)                       │
 │  └──────────────────────────────────────────────────────────┘
 │
 │  ┌──────────────────────────────────────────────────────────┐
 │  │ autonomy = human_review                                  │
 │  │ Tools: QueueForReviewTool                                │
-│  │        creates pending_review record in PostgreSQL       │
-│  │        notifies plan administrator                       │
-│  │ Output: QueueReceipt                                     │
-│  │         { "reference_number": "HW-2024-0042",            │
-│  │           "estimated_review_days": 3 }                   │
-│  │ PAAP does NOT execute — admin must approve first         │
+│  │        creates pending_review record in queue file       │
+│  │ Output: QueueReceipt { "reference_number": "HW-0042" }  │
+│  │ PAAP does NOT execute — sponsor must approve first       │
+│  │                                                          │
+│  │ → participant uploads docs (hardship/QDRO required)      │
+│  │ → sponsor: approve-docs → approve                        │
+│  │   POST /queue/{id}/approve                               │
+│  │   (disbursement actions → approved_awaiting_bank_details)│
+│  │ → participant enters bank details:                       │
+│  │   POST /transactions/disburse                           │
+│  │   { routing_number, account_number, account_type,       │
+│  │     entry_id }                                           │
+│  │ → PAAP validates FAP token → transaction recorded        │
+│  │   (vested_balance update: Phase 6)                       │
 │  └──────────────────────────────────────────────────────────┘
 │
 │  ┌──────────────────────────────────────────────────────────┐
@@ -1851,32 +1921,98 @@ RETIREMENT CREW starts  ← Aldergate (TPA: CrewAI + Claude + PLAP/FAP/PAAP)
    "Your loan of $20,000 has been approved.
     · Monthly payment: $387/month for 60 months
     · Interest rate: 6.5% (paid back into your account)
-    · Processing: 3–5 business days to your bank on file
 
     Type 'confirm' to proceed or 'cancel' to stop."
 ─────────────────────────────────────────────────────────────────
 
-[Phase 5 — OUTBOUND to Recordkeeper, after participant confirms]
+── EXECUTION PATHS (after Task 6 response) ──────────────────────
 
-Step 1 — PAAP writes instruction to Aldergate PostgreSQL
-  "PART-008: loan_initiation $20,000 approved — fap_token ABC"
-
-Step 2 — Aldergate generates outbound instruction file
-  instruction_sender.py builds file in recordkeeper's format
-  → SFTP upload to Recordkeeper (Fidelity / Vanguard / Empower)
-
-Step 3 — Recordkeeper processes instruction file
-  · Reads "PART-008 loan $20,000 — disburse to routing/account on file"
-  · Liquidates $20,000 worth of fund units from participant's 401k
-  · Generates NACHA file → ACH to participant's external bank
-  · 3–5 business days for funds to appear in participant's checking account
-  · For distributions: withholds mandatory 20% federal tax (IRC § 3405)
-  · Issues 1099-R at year end for taxable events
-
-Step 4 — Recordkeeper nightly SFTP file drop (next ~10pm ET)
-  Aldergate ingestion pipeline (sftp_watcher.py → parser → upsert)
-  → PostgreSQL vested_balance updated to reflect funds sent
-  Participant sees updated balance on next login
+Does this action move money out of the account?
+         │
+         ├── NO — deferral_change · investment_reallocation
+         │         address_update · beneficiary_update · qdro
+         │         │
+         │         ▼
+         │  ┌──────────────────────────────────────────────────┐
+         │  │  PAAP EXECUTES IMMEDIATELY                        │
+         │  │  FAP token validated → transaction recorded       │
+         │  │  ~40 seconds from confirm / sponsor approve       │
+         │  │  no balance change — record update only           │
+         │  └──────────────────────────────────────────────────┘
+         │
+         └── YES — loan_initiation
+                   hardship_distribution
+                   in_service_distribution
+                        │
+                        ├── autonomy = supervised (loan_initiation)
+                        │        │
+                        │        ▼
+                        │  ┌───────────────────────────────────┐
+                        │  │  STEP 1 — PARTICIPANT CONFIRMS    │
+                        │  │  POST /transactions/confirm        │
+                        │  │  → { status: awaiting_bank_details}│
+                        │  └───────────────────────────────────┘
+                        │        │
+                        │        ▼
+                        │  ┌───────────────────────────────────┐
+                        │  │  STEP 2 — BANK DETAILS            │
+                        │  │  POST /transactions/disburse       │
+                        │  │  {                                 │
+                        │  │    routing_number: "021000021",    │
+                        │  │    account_number: "xxxxxxxx",     │
+                        │  │    account_type:   "checking"      │
+                        │  │  }                                 │
+                        │  │  used once · never stored          │
+                        │  └───────────────────────────────────┘
+                        │        │
+                        │        ▼
+                        │  ┌───────────────────────────────────┐
+                        │  │  PAAP EXECUTES                    │
+                        │  │  transaction recorded (~40 sec)    │
+                        │  │  vested_balance decrement: Phase 6│
+                        │  └───────────────────────────────────┘
+                        │
+                        └── autonomy = human_review
+                            (hardship_distribution, in_service_distribution)
+                                 │
+                                 ▼
+                           ┌───────────────────────────────────┐
+                           │  STEP 1 — PARTICIPANT UPLOADS DOCS│
+                           │  POST /documents/upload            │
+                           │  Claude Haiku verifies             │
+                           │  (required before sponsor approves │
+                           │   for hardship + qdro)             │
+                           └───────────────────────────────────┘
+                                 │
+                                 ▼
+                           ┌───────────────────────────────────┐
+                           │  STEP 2 — SPONSOR APPROVES        │
+                           │  GET  /queue/{id}/docs             │
+                           │  POST /queue/{id}/approve-docs     │
+                           │  POST /queue/{id}/approve          │
+                           │  → { status:                       │
+                           │      approved_awaiting_bank_details}│
+                           └───────────────────────────────────┘
+                                 │
+                                 ▼
+                           ┌───────────────────────────────────┐
+                           │  STEP 3 — BANK DETAILS            │
+                           │  POST /transactions/disburse       │
+                           │  {                                 │
+                           │    routing_number: "021000021",    │
+                           │    account_number: "xxxxxxxx",     │
+                           │    account_type:   "checking",     │
+                           │    entry_id:       "AB064BBC"      │
+                           │  }                                 │
+                           │  used once · never stored          │
+                           └───────────────────────────────────┘
+                                 │
+                                 ▼
+                           ┌───────────────────────────────────┐
+                           │  PAAP EXECUTES                    │
+                           │  transaction recorded (~40 sec)    │
+                           │  vested_balance decrement: Phase 6│
+                           └───────────────────────────────────┘
 ─────────────────────────────────────────────────────────────────
 ```
 
@@ -1936,44 +2072,49 @@ Participant sees:
    Takes effect next payroll cycle."
 ```
 
-### `supervised` — show summary first, wait for confirm
+### `supervised` — show summary, wait for confirm, then execute
 
-Big money or hard-to-reverse actions. The participant must see exactly what
-they're agreeing to before anything executes. Token is held until they confirm.
+Big money or hard-to-reverse actions. Token is held until the participant confirms.
+On confirm, PAAP executes immediately — vested_balance updated in the app at once.
 
 ```
 Example: participant requests a $20,000 loan
 
-Token issued → Intent Agent shows summary → participant types "confirm"
-             → PAAP executes → done
+Token issued → Intent Agent shows summary → participant confirms
+             → POST /transactions/confirm
+             → PAAP executes immediately
+             → loan recorded, vested_balance reduced by $20,000
 
-             If participant types "cancel" → token discarded → nothing moves
+             Cancel → token discarded, nothing changes
 
 Participant sees:
-  "Your loan of $20,000 has been approved.
-   · Monthly payment: $387/month for 60 months
-   · Interest rate: 6.5% (paid back into your account)
-   · Processing: 3–5 business days
-
-   Type 'confirm' to proceed or 'cancel' to stop."
+  [1] "Your loan of $20,000 has been approved — confirm to proceed."
+  [2] "Done. Loan of $20,000 processed. Your vested balance has been updated."
 ```
 
-### `human_review` — admin must approve before anything executes
+### `human_review` — sponsor approval → PAAP executes immediately
 
-Legally required human oversight. PAAP cannot execute these no matter what.
-The token goes into a queue. A plan administrator reviews it and approves it
-manually. Only then does PAAP write anything.
+Legally required human oversight. PAAP cannot execute without the sponsor.
+The token goes into a queue. The plan sponsor reviews, approves, and PAAP
+executes immediately — vested_balance updated in ~40 seconds, no external transfer.
 
 ```
 Example: participant requests a hardship withdrawal
 
-Token issued → request queued → admin reviews within 2-3 business days
-             → admin approves → PAAP executes
+Token issued → request queued → participant uploads docs → LLM verifies
+             → sponsor: approve-docs → approve
+             → POST /queue/{id}/approve
+             → PAAP executes → transaction recorded
+
+Done in ~40 seconds. No external delays. Plan sponsor approved it — it's done.
+(vested_balance decrement in PostgreSQL: Phase 6. In demo: in-memory only.)
+
+(non-disbursement, e.g. QDRO, beneficiary) → same: approved immediately
 
 Participant sees:
-  "Your hardship withdrawal request has been submitted for review.
-   A plan administrator will contact you within 2-3 business days.
-   Reference number: HW-2024-0042"
+  [1] "Submitted for review. Reference: AB064BBC."
+  [2] (after sponsor approves) "Your request has been approved.
+       $5,000 has been removed from your vested balance."
 ```
 
 ---
@@ -2083,30 +2224,31 @@ No matter how the interface evolves, these invariants are permanent:
 | AdvisorCrew | crew/crews/advisor_crew.py | 3 | 5 | GetFundLineup, GetParticipantSummary, RunComplianceCheck, ExecuteTransaction |
 | Router | crew/router.py | — | — | Routes by principal_type string |
 
-### What the Recordkeeper Is (and Is Not)
+### Recordkeeper Role (Current Scope)
 
-The **Recordkeeper** (Fidelity, Vanguard, Empower) is:
-- The external custodian that actually holds participant fund units and money
-- NOT a conversational agent or portal user
-- A two-way automated data partner: Aldergate sends outbound instructions,
-  recordkeeper sends back nightly balance files
+In the current build, there is **no external recordkeeper** (Fidelity, Vanguard, Empower).
+The **plan sponsor handles all recordkeeper duties**:
 
-There is no RecordkeeperCrew. There is a Phase 5 two-way SFTP pipeline:
-```
-OUTBOUND (Aldergate → Recordkeeper):
-  PAAP executes → instruction_sender.py builds file → SFTP to recordkeeper
-  Recordkeeper liquidates fund units → NACHA → participant's external bank
+- Managing participant account data (balances, elections, loan status)
+- Confirming disbursements after approving human_review requests
+- Participant data sync and account management (done manually by sponsor)
 
-INBOUND (Recordkeeper → Aldergate):
-  Recordkeeper nightly SFTP drop → sftp_watcher.py → parser → upsert
-  → PostgreSQL participants table updated
-  CrewAI crews read from this table at query time
-```
-
-### Plan Sponsor Full Duties (beyond plan onboarding)
+There is no RecordkeeperCrew. External SFTP integration is Phase 5+ and out of scope.
+The two active crews are:
 
 ```
-Administrative duties in SponsorCrew:
+ParticipantCrew — handles all self-service participant transactions
+SponsorCrew — handles plan admin AND recordkeeper duties (approvals, queue, data)
+```
+
+AdvisorCrew exists in the codebase but is out of scope for the current build.
+
+### Plan Sponsor Full Duties (admin + recordkeeper)
+
+The plan sponsor is the single admin authority. They handle both plan administration and all recordkeeper responsibilities in the current scope.
+
+```
+Plan Administration (SponsorCrew):
   1. Approve/deny human_review queue
      - hardship distributions (ERISA § 401(k)(2)(B))
      - QDROs (ERISA § 206(d) — within 18-month determination window)
@@ -2143,6 +2285,26 @@ Administrative duties in SponsorCrew:
 
   8. Agent registry management
      - Add/revoke agent credentials in agents.py (→ database in production)
+
+Recordkeeper Duties (handled by plan sponsor in current scope):
+  9. Participant account data management
+     - View and update vested balances, employment status, loan records
+     - Manage investment elections per participant
+
+  10. Disbursement confirmation
+      - After approving a disbursement request (hardship, in-service):
+        entry moves to approved_awaiting_bank_details
+      - Participant then provides bank details via POST /transactions/disburse
+      - Sponsor confirms funds were sent; balance updated manually
+
+  11. Account lifecycle management
+      - Onboarding new participants
+      - Processing terminations (vesting cutoff, forfeiture)
+      - QDRO alternate payee account setup
+
+  NOTE: Phase 5+ will replace items 9–11 with automated external SFTP
+        (Fidelity/Vanguard/Empower nightly balance file + outbound instructions).
+        Until then, plan sponsor handles these manually.
 ```
 
 ### Running the CrewAI CLI
@@ -2153,10 +2315,11 @@ source .venv/bin/activate
 python demo/crew_cli.py
 ```
 
-Three roles at the menu:
+Two active roles in current scope:
 1. **Participant** — loans, deferrals, investments, distributions (natural language)
-2. **Plan Sponsor** — review queue, blackouts, audit log (command-style)
-3. **Investment Advisor** — submit reallocation/deferral recommendations for a client
+2. **Plan Sponsor** — review queue, blackouts, audit log, all recordkeeper duties (command-style)
+
+(Investment Advisor exists in the codebase but is out of scope for current build.)
 
 See [CLI_GUIDE.md](CLI_GUIDE.md) for a full reference of every action, the confirm/cancel flow, and mock data.
 
@@ -2200,8 +2363,20 @@ Phase 3 · CrewAI + LLM         ✅ COMPLETE
 │   └── CLI: Approve blocked for hardship/QDRO until verified docs on file
 └── LLM-based document verification (Claude Haiku, direct API call, not CrewAI)
 
-Phase 4 · FastAPI Endpoints    ⏳ NEXT
-Phase 5 · Recordkeeper SFTP Integration   ⏳ PENDING
+Phase 4 · FastAPI Endpoints    ✅ COMPLETE
+├── POST /auth/login, GET /meta/*
+├── POST /chat (SSE streaming)
+├── GET/POST /transactions/pending, confirm, cancel
+├── POST /transactions/disburse (bank details collection)
+├── POST /documents/upload, GET /documents/{id}
+├── GET/POST /queue, /queue/{id}/approve-docs, approve, deny
+└── GET /admin/audit, POST /admin/blackout
+
+Phase 5 · External Recordkeeper Integration   ⏳ OUT OF SCOPE (plan sponsor handles now)
+  When needed: SFTP integration with Fidelity/Vanguard/Empower
+  Inbound: nightly balance file → PostgreSQL participants table
+  Outbound: instruction file → ACH disbursement to participant's bank
+
 Phase 6 · Production Hardening ⏳ PENDING
 ```
 
@@ -2252,103 +2427,82 @@ All Phase 3 polish — no new phases, only hardening the existing demo:
 
 ---
 
-## Upcoming Work — Phase 4 (FastAPI REST Endpoints)
+## Phase 4 — FastAPI REST Endpoints (COMPLETE)
 
-Phase 4 builds the REST API layer that sits on top of the existing compliance engine. The CLI stays as the demo interface; FastAPI is the production-facing API that the web portal (Path A) and external integrations will call.
+FastAPI sits on top of the existing compliance engine. The CLI remains the demo interface; FastAPI is the production-facing API.
 
-**What to build:**
+**Built endpoints:**
 
 ```
-POST /participant/{participant_id}/loan             → runs FAP, returns FapResult
-POST /participant/{participant_id}/deferral         → runs FAP, returns FapResult
-POST /participant/{participant_id}/hardship         → runs FAP, routes to queue
-POST /participant/{participant_id}/confirm          → executes supervised pending
-POST /participant/{participant_id}/distribution     → separation / in-service
-POST /participant/{participant_id}/rmd              → RMD processing
-POST /participant/{participant_id}/reallocation     → investment reallocation
-POST /participant/{participant_id}/beneficiary      → beneficiary update
-POST /participant/{participant_id}/address          → address update (full autonomy)
+POST /auth/login                    → JWT session token (1hr TTL)
+GET  /meta/participants             → demo participant list
+GET  /meta/plans                    → demo plan list
+GET  /meta/actions                  → valid action types + example messages
 
-GET  /sponsor/{plan_id}/queue                      → pending review items
-POST /sponsor/{plan_id}/approve/{entry_id}         → approve + re-issue token + execute (blocks if no verified docs for hardship/QDRO)
-POST /sponsor/{plan_id}/deny/{entry_id}            → deny with reason
-GET  /sponsor/{plan_id}/audit                      → FAP audit log
-POST /sponsor/{plan_id}/blackout                   → activate/deactivate
+POST /chat                          → SSE streaming (participant or sponsor message)
+GET  /transactions/pending          → supervised transaction awaiting confirm
+POST /transactions/confirm          → confirm supervised (disbursement → awaiting_bank_details)
+POST /transactions/cancel           → discard supervised pending
+POST /transactions/disburse         → provide bank details → PAAP executes
+                                      { routing_number, account_number, account_type, entry_id? }
+                                      no entry_id = supervised flow
+                                      entry_id = human_review flow
 
-POST /participant/{participant_id}/documents       → upload supporting doc for a queue entry (hardship/QDRO)
-GET  /participant/{participant_id}/documents/{entry_id} → list docs for a queue entry
-GET  /sponsor/{plan_id}/documents/{entry_id}       → sponsor view: docs for a queue entry
+POST /documents/upload              → upload hardship/QDRO supporting doc (multipart)
+GET  /documents/{doc_id}            → view a single document
 
-GET  /plan/{plan_id}/rules                         → plan configuration
-GET  /participant/{participant_id}/summary         → account summary (no PII)
+GET  /queue                         → pending sponsor review items
+GET  /queue/{entry_id}              → single queue entry detail
+GET  /queue/{entry_id}/docs         → documents for a queue entry
+POST /queue/{entry_id}/approve-docs → sponsor approves documents (required for hardship/QDRO)
+POST /queue/{entry_id}/approve      → sponsor approves request
+                                      disbursement actions → approved_awaiting_bank_details
+                                      other actions → approved (executes immediately)
+POST /queue/{entry_id}/deny         → sponsor denies with reason
+
+GET  /admin/audit                   → FAP audit log (all decisions, approved + denied)
+POST /admin/blackout                → activate/deactivate blackout via SponsorCrew
+
+GET  /health                        → server status check
 ```
 
-**Auth pattern for Phase 4:**
-- Each request carries `agent_id` in the header (maps to AGENT_REGISTRY)
-- FastAPI middleware validates `agent_id` exists and has scope for the requested action
-- No new auth system needed — FAP Rule 1 already checks this; middleware just rejects before FAP runs
+**Auth:** JWT session tokens. `POST /auth/login` issues a 1hr token. All endpoints require `Authorization: Bearer <token>`.
 
-**Key wiring task:**
-The approve endpoint must re-issue a fresh FAP token (the original 5-min token expired) before calling PAAP to execute. This is the `human_review → approval → re-issue → PAAP execute` loop described in DEMO_GUIDE.md Scenario 5.
+**Key implementation detail:**
+The disburse endpoint handles both flows from one endpoint. No `entry_id` = supervised (uses in-memory `_disbursement_pending`). With `entry_id` = human_review (uses FAP token stored in queue entry, status must be `approved_awaiting_bank_details`). Bank details never stored.
 
-**What does NOT change:**
-- PLAP, FAP, PAAP code is unchanged
-- The 12 compliance rules are unchanged
-- Mock data can stay — FastAPI just calls the same functions the CLI calls
+See [SWAGGER_GUIDE.md](SWAGGER_GUIDE.md) for step-by-step testing instructions.
 
 ---
 
-## Upcoming Work — Phase 5 (Recordkeeper SFTP Integration)
+## Phase 5 — External Recordkeeper Integration (Out of Scope Now)
 
-Two-way SFTP pipeline between Aldergate and the external recordkeeper
-(Fidelity, Vanguard, Empower — whichever the plan sponsor uses).
+**Current state:** Plan sponsor handles all recordkeeper duties manually. This is the correct approach for the current build — no external SFTP is needed until the product is deployed with a real recordkeeper.
 
-**Before starting Phase 5, confirm with lead:**
+**What "plan sponsor as recordkeeper" means today:**
+- Participant data (balances, loans, elections) managed manually by sponsor via admin portal
+- After approving a disbursement, participant provides bank details (POST /transactions/disburse) and the sponsor confirms funds were sent
+- Balance updates done manually by sponsor
+
+**When Phase 5 becomes relevant (not now):**
+
+Before starting, confirm with lead:
 1. Which recordkeeper? (Fidelity, Vanguard, Empower, or others)
 2. File format? (NSCC standard, recordkeeper's proprietary spec, or CSV)
-3. SFTP credentials and inbound drop schedule (most do nightly ~8–10pm ET)
-4. Outbound instruction format — what fields the recordkeeper expects
+3. SFTP credentials and inbound drop schedule
+4. Outbound instruction format
 5. Whether they provide a sandbox/test environment
 
-**What to build:**
+**What to build (Phase 5, future):**
 ```
 data/ingestion/                    ← INBOUND (Recordkeeper → Aldergate)
 ├── sftp_watcher.py      ← polls SFTP, downloads nightly balance file
 ├── parser.py            ← parses recordkeeper format → Pydantic models
-├── validator.py         ← validates required fields, detects anomalies
 └── upsert.py            ← writes to PostgreSQL participants table
 
 data/outbound/                     ← OUTBOUND (Aldergate → Recordkeeper)
-├── instruction_sender.py ← triggered after PAAP executes an approved txn
-│                           builds instruction file in recordkeeper's format
-│                           uploads via SFTP to recordkeeper's inbound folder
-└── instruction_log.py   ← records every outbound file sent (audit trail)
-```
-
-**Full bidirectional flow:**
-```
-APPROVED TRANSACTION (outbound path):
-  PAAP executes → writes to PostgreSQL
-       │
-       ▼
-  instruction_sender.py
-  builds instruction file: participant ID, action, amount, bank routing
-       │
-       ▼  SFTP upload
-  RECORDKEEPER receives file
-  · Liquidates fund units
-  · Generates NACHA file → ACH to participant's external bank (3–5 days)
-  · For distributions: withholds 20% federal tax (IRC § 3405)
-
-NIGHTLY BALANCE SYNC (inbound path):
-  Recordkeeper SFTP file drop (~10pm ET)
-       │
-       ▼
-  sftp_watcher.py → parser.py → validator.py → upsert.py
-       │
-       ▼
-  PostgreSQL participants updated
-  (vested_balance reflects funds actually sent — delayed from instruction time)
+├── instruction_sender.py ← triggered after PAAP executes
+└── instruction_log.py   ← audit trail for outbound files
 ```
 
 ---
@@ -2363,25 +2517,25 @@ Phase 2 already wired PostgreSQL reads via `data/db.py`. Phase 6 adds:
 
 ---
 
-## Documentation Readiness for Lead
+## Documentation Status
 
-The three main documents are:
-- **CLAUDE.md** — full architecture, all design decisions, ERISA concepts, file structure
-- **WORKFLOW2.md** (this file) — orchestration spec, agent definitions, tool matrix, phase status
-- **DEMO_GUIDE.md** — how to run the demo, all 9 scenarios, what to say
+| Document | What it covers | Status |
+|---|---|---|
+| [CLAUDE.md](CLAUDE.md) | Full architecture, ERISA concepts, file structure, critical rules | Current |
+| [WORKFLOW2.md](WORKFLOW2.md) | Orchestration spec, agent definitions, tool matrix, phase status | Current |
+| [SWAGGER_GUIDE.md](SWAGGER_GUIDE.md) | Step-by-step API testing guide for every endpoint | Current |
+| [DEMO_GUIDE.md](DEMO_GUIDE.md) | All demo scenarios, every participant × action, sponsor flows | Current |
+| [CLI_GUIDE.md](CLI_GUIDE.md) | Every CLI action, confirm/cancel flow, error messages | Current |
 
-**Are they sufficient for Phase 4?**
+**Current build is demo-ready.** Phases 1–4 are complete. The full participant → compliance → supervisor confirm / sponsor approve → bank details → disbursement flow is wired end to end.
 
-Yes, for FastAPI endpoint design. The architecture is fully specified: every action type, every tool, the PLAP/FAP/PAAP flow, autonomy levels, and the human_review re-issue pattern. A developer can build Phase 4 from CLAUDE.md + WORKFLOW2.md without asking additional questions.
+**What is deferred (not blocking current demo):**
+- Phase 5: external recordkeeper SFTP — plan sponsor handles this manually now
+- Phase 6: PostgreSQL write-back for PAAP mutations, Redis token store, PII encryption
 
-**What we still need from lead before Phase 5:**
+**Before Phase 5 (external recordkeeper) becomes relevant, confirm:**
 - Which recordkeeper? (Fidelity, Vanguard, Empower, or others)
-- Outbound file format / data dictionary (what fields the recordkeeper expects in instruction files)
-- Inbound file format / data dictionary (participant balance file spec from recordkeeper)
-- SFTP credentials and drop schedule (most do nightly drops at 8–10pm ET)
-- Whether they provide a sandbox/test environment for integration testing
-
-**What we still need before Phase 6:**
-- PostgreSQL connection string for the production environment
-- Whether Redis is already provisioned or needs to be set up
-- Deployment target (AWS RDS, on-prem, managed container?)
+- Outbound file format / data dictionary
+- Inbound balance file format / data dictionary
+- SFTP credentials and drop schedule
+- Whether they provide a sandbox/test environment

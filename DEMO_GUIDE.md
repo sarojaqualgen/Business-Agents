@@ -139,6 +139,8 @@ Type `confirm` to execute · `cancel` to abort.
 
 **Note:** The FAP token is issued but not consumed until `confirm`. Typing `cancel` invalidates the token with no API cost.
 
+**API flow (different from CLI):** Via FastAPI, `POST /transactions/confirm` returns `awaiting_bank_details` for loans. The participant then calls `POST /transactions/disburse` with their routing number and bank account to complete disbursement. Bank details are used once and never stored. See [SWAGGER_GUIDE.md](SWAGGER_GUIDE.md) Step 4.
+
 ---
 
 ### 2. Loan — Over Cap (Denied)
@@ -210,12 +212,14 @@ Select `1` → Claude Haiku verifies automatically:
   "Medical bill from Metro General Hospital, 2026-05-14, patient balance $1,865.00"
 ```
 
-**To continue the demo as plan sponsor:**
+**To continue the demo as plan sponsor (CLI):**
 1. Type `back` → pick Plan Sponsor → pick PLAN-003
 2. Type `queue` → see the entry with `📎 1 doc  (LLM verified · awaiting your review)`
 3. Type `docs AB12CD34` → read the document content, LLM verification note, and "Awaiting your approval" status
 4. Type `approve doc AB12CD34` → "Document approved. You may now approve the request."
 5. Type `Approve AB12CD34 — valid medical documentation provided`
+
+**Via API (adds bank details step):** `POST /queue/{id}/approve` returns `approved_awaiting_bank_details`. The participant then calls `POST /transactions/disburse` with `entry_id`, routing number, and account number to receive funds. See [SWAGGER_GUIDE.md](SWAGGER_GUIDE.md) Step 6.
 
 **What to point out:** Three separate steps — read, approve doc, approve request. The LLM auto-verification is the first check; sponsor document approval is the second. Only after both can the request be approved. This mirrors real ERISA fiduciary practice where the plan sponsor must personally verify hardship documentation.
 
@@ -897,6 +901,10 @@ Rule 6 fires: **RMD_NOT_YET_REQUIRED** (age 31)
 9. `queue` — confirm it's gone
 10. `audit` — see the FAP decision
 
+**Via API (hardship is a disbursement — adds bank details step):** After step 8, `POST /queue/{id}/approve` returns `approved_awaiting_bank_details`. Re-login as participant and call `POST /transactions/disburse` with `entry_id`, routing number, and account number to complete.
+
+**QDRO via API:** QDRO is not a disbursement action (no funds leave the plan immediately — alternate payee gets a separate account). `POST /queue/{id}/approve` for QDRO returns `approved` directly.
+
 **If participant skipped document upload:**
 - Sponsor sees `⚠ no documents uploaded`
 - `Approve <ID>` → blocked: shows 3-step instructions
@@ -905,7 +913,11 @@ Rule 6 fires: **RMD_NOT_YET_REQUIRED** (age 31)
 - Blocked: "Cannot approve — documents not yet reviewed"
 - Shows: Step 1: docs · Step 2: approve doc · Step 3: Approve
 
-**For other human_review actions (beneficiary_update, in_service_distribution):**
+**For other human_review actions (beneficiary_update, in_service_distribution, separation_distribution, rmd):**
+- `in_service_distribution` — disbursement action: same bank details step applies
+- `beneficiary_update`, `separation_distribution`, `rmd` — no disbursement: approve → done immediately
+
+Workflow:
 1. Run the action as a participant
 2. No document prompt (no doc requirement for these)
 3. Switch to sponsor → `queue` → `Approve <ID> — reason`

@@ -134,6 +134,43 @@ def approve(entry_id: str, sponsor_note: str = "", resolved_at: str = "") -> Opt
     return entry
 
 
+def approve_awaiting_bank(entry_id: str, sponsor_note: str = "", resolved_at: str = "") -> Optional[ReviewQueueEntry]:
+    """Approve a disbursement action but hold it until participant provides bank details.
+    Re-issues a fresh FAP token so the participant has a full window to respond after approval."""
+    entry = next((e for e in _queue if e.entry_id == entry_id and e.status == "pending"), None)
+    if entry:
+        # Original token was issued during chat and may have expired by the time sponsor approves.
+        # Re-issue so participant gets a fresh token starting from approval time.
+        try:
+            from agents.fap.tokens import issue_token
+            from agents.fap.models import ActionType, AutonomyLevel
+            new_token, _, _ = issue_token(
+                agent_id=entry.agent_id,
+                participant_id=entry.participant_id,
+                plan_id=entry.plan_id,
+                action=ActionType(entry.action),
+                autonomy_level=AutonomyLevel.human_review,
+                payload=entry.payload,
+            )
+            entry.fap_token = new_token
+        except Exception:
+            pass  # keep original token if re-issue fails
+        entry.status = "approved_awaiting_bank_details"
+        entry.sponsor_note = sponsor_note
+        entry.resolved_at = resolved_at
+        _save()
+    return entry
+
+
+def finalize_disbursed(entry_id: str) -> Optional[ReviewQueueEntry]:
+    """Mark entry as fully disbursed after participant provides bank details."""
+    entry = next((e for e in _queue if e.entry_id == entry_id and e.status == "approved_awaiting_bank_details"), None)
+    if entry:
+        entry.status = "approved"
+        _save()
+    return entry
+
+
 def deny(entry_id: str, sponsor_note: str = "", resolved_at: str = "") -> Optional[ReviewQueueEntry]:
     entry = next((e for e in _queue if e.entry_id == entry_id and e.status == "pending"), None)
     if entry:

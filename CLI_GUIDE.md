@@ -132,6 +132,8 @@ confirm / cancel > confirm
   Term        5 years
 ```
 
+> **CLI vs API difference:** The CLI executes the loan immediately on `confirm`. The FastAPI layer adds a bank details collection step — after `POST /transactions/confirm` returns `awaiting_bank_details`, the participant must call `POST /transactions/disburse` with their routing number and account number before funds move. The CLI is a developer tool; the bank details step is the production UX. See [SWAGGER_GUIDE.md](SWAGGER_GUIDE.md) for the full API flow.
+
 **What you see (denied):**
 ```
 RunComplianceCheck  loan_initiation  PART-008  →  DENIED  LOAN_CAP_EXCEEDED
@@ -473,7 +475,7 @@ Every `human_review` transaction from participants lands here. The sponsor sees:
 - Amount and payload
 - FAP audit ID and token
 
-The sponsor either approves (ExecuteTransaction runs) or denies (audit record written, token discarded).
+The sponsor either approves or denies. For disbursement actions (hardship, in-service) the approval does not immediately execute — it moves the entry to `approved_awaiting_bank_details` and the participant then provides bank details via `POST /transactions/disburse` in the API. Non-disbursement approvals (beneficiary, QDRO) write the audit record immediately. Denials write the audit record and discard the token.
 
 ---
 
@@ -612,7 +614,7 @@ Appears automatically after a supervised approval:
 ```
 
 The input prompt changes to `confirm / cancel >` while you're in this state.
-- `confirm` → executes immediately, shows Transaction Executed
+- `confirm` → executes immediately (CLI only — API has an extra bank details step for loan_initiation)
 - `cancel` → clears the pending transaction, nothing executes
 - Anything else → clears pending and treats it as a new query
 

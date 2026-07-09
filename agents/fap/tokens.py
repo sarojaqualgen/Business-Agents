@@ -20,7 +20,7 @@ from agents.fap.models import ActionType, AutonomyLevel
 
 _SECRET = os.getenv("FAP_JWT_SECRET", "dev-only-insecure-secret-change-in-production")
 _ALGORITHM = "HS256"
-_TTL_SECONDS = 300
+_TTL_SECONDS = 86400  # 24 hours — human_review entries need time for sponsor + participant steps
 
 # In production this is Redis or a DB table.
 _consumed_tokens: set[str] = set()

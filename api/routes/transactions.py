@@ -1,17 +1,26 @@
 """
-Supervised transaction endpoints — for confirm / cancel flows.
+Supervised transaction endpoints — confirm / cancel / disburse.
 
-After a supervised action (loan, deferral to 0%) the crew returns
-"supervised_pending". The UI shows a confirmation panel, then calls:
+Flow for SUPERVISED actions (loan_initiation, deferral to 0%):
 
-GET  /transactions/pending   — is there a supervised transaction waiting?
-POST /transactions/confirm   — execute it
-POST /transactions/cancel    — discard it
+  POST /chat → supervised_pending stored in memory
+  GET  /transactions/pending   → UI shows confirmation panel
+  POST /transactions/confirm   → if disbursement action: moves to disbursement_pending
+                                 if non-disbursement (deferral change): executes immediately
+  POST /transactions/disburse  → participant provides bank details → funds sent
+
+Flow for HUMAN_REVIEW disbursement actions (hardship_distribution, in_service_distribution):
+
+  POST /chat → queued → sponsor approves → entry status = approved_awaiting_bank_details
+  POST /transactions/disburse  → participant provides bank details + entry_id → funds sent
 """
 
 import json
+import re
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from api.auth import SessionToken, get_session
 from crew.tools.paap_tools import (
@@ -19,8 +28,29 @@ from crew.tools.paap_tools import (
     clear_supervised_pending,
     get_supervised_pending,
 )
+from data.review_queue import finalize_disbursed, get_entry, reload as rq_reload
 
 router = APIRouter()
+
+# Actions that disburse funds to a bank account — require bank details step.
+# deferral_change and investment_reallocation are supervised but move no external funds.
+DISBURSEMENT_ACTIONS = {"loan_initiation", "hardship_distribution", "in_service_distribution"}
+
+# In-memory store: participant_id → {action, payload, payload_json, fap_token}
+# Populated by POST /confirm for disbursement actions.
+_disbursement_pending: dict[str, dict] = {}
+
+
+def _get_disbursement_pending(participant_id: str) -> dict | None:
+    return _disbursement_pending.get(participant_id)
+
+
+def _set_disbursement_pending(participant_id: str, data: dict) -> None:
+    _disbursement_pending[participant_id] = data
+
+
+def _clear_disbursement_pending(participant_id: str) -> None:
+    _disbursement_pending.pop(participant_id, None)
 
 
 def _participant_only(session: SessionToken) -> None:
@@ -28,11 +58,21 @@ def _participant_only(session: SessionToken) -> None:
         raise HTTPException(403, "Only participants can confirm transactions")
 
 
+class DisburseRequest(BaseModel):
+    routing_number: str
+    account_number: str
+    account_type: Literal["checking", "savings"]
+    entry_id: Optional[str] = None  # only for human_review flow
+
+
+# ── GET /transactions/pending ──────────────────────────────────────────────────
+
 @router.get("/pending")
 def get_pending(session: SessionToken = Depends(get_session)):
     """
     Returns the supervised transaction waiting for confirmation, or null.
-    UI should poll this after a /chat response that contained autonomy_level=supervised.
+    Call after every POST /chat response so the UI knows whether to show
+    a confirmation panel.
     """
     _participant_only(session)
     pending = get_supervised_pending(session.participant_id)
@@ -42,7 +82,6 @@ def get_pending(session: SessionToken = Depends(get_session)):
     action = pending["action"]
     payload = pending["payload"]
 
-    # Build a human-readable summary for the UI confirmation panel
     summary = {}
     if action == "loan_initiation":
         summary = {
@@ -60,37 +99,57 @@ def get_pending(session: SessionToken = Depends(get_session)):
             "warning": "Setting to 0% stops all retirement contributions." if float(pct) == 0 else None,
         }
 
+    requires_bank_details = action in DISBURSEMENT_ACTIONS
+
     return {
-        "has_pending":   True,
-        "participant_id": session.participant_id,
-        "action":        action,
-        "action_label":  action.replace("_", " ").title(),
-        "payload":       payload,
-        "summary":       summary,
-        "message":       "FAP approved this transaction. All 12 ERISA rules passed. Your explicit confirmation is required.",
+        "has_pending":          True,
+        "participant_id":       session.participant_id,
+        "action":               action,
+        "action_label":         action.replace("_", " ").title(),
+        "payload":              payload,
+        "summary":              summary,
+        "requires_bank_details": requires_bank_details,
+        "message":              "FAP approved this transaction. All 12 ERISA rules passed. Your explicit confirmation is required.",
     }
 
+
+# ── POST /transactions/confirm ─────────────────────────────────────────────────
 
 @router.post("/confirm")
 def confirm_transaction(session: SessionToken = Depends(get_session)):
     """
-    Execute the pending supervised transaction.
-    Consumes the FAP token — cannot be reversed after this call.
+    Confirm the supervised transaction.
+
+    - Disbursement actions (loan, hardship, in-service): moves to disbursement_pending
+      and returns status=awaiting_bank_details. UI must then call POST /transactions/disburse.
+    - Non-disbursement actions (deferral change): executes immediately.
     """
     _participant_only(session)
     pending = get_supervised_pending(session.participant_id)
     if not pending:
         raise HTTPException(404, "No pending transaction found for this participant")
 
-    clear_supervised_pending(session.participant_id)
+    action = pending["action"]
 
+    if action in DISBURSEMENT_ACTIONS:
+        # Hold — need bank details before funds can move
+        _set_disbursement_pending(session.participant_id, pending)
+        clear_supervised_pending(session.participant_id)
+        return {
+            "status":  "awaiting_bank_details",
+            "action":  action,
+            "message": "Transaction confirmed. Please provide your bank details to receive the funds.",
+        }
+
+    # Non-disbursement supervised action (e.g. deferral to 0%) — execute now
+    clear_supervised_pending(session.participant_id)
     tool = ExecuteTransactionTool()
     raw = tool._run(
         participant_id=session.participant_id,
-        action=pending["action"],
+        action=action,
         payload_json=pending["payload_json"],
         fap_token=pending["fap_token"],
-        autonomy_level="full",   # force execution — participant already confirmed
+        autonomy_level="full",
     )
 
     try:
@@ -104,11 +163,11 @@ def confirm_transaction(session: SessionToken = Depends(get_session)):
     return result
 
 
+# ── POST /transactions/cancel ──────────────────────────────────────────────────
+
 @router.post("/cancel")
 def cancel_transaction(session: SessionToken = Depends(get_session)):
-    """
-    Discard the pending supervised transaction. FAP token is abandoned (never consumed).
-    """
+    """Discard the pending supervised transaction. FAP token is abandoned."""
     _participant_only(session)
     pending = get_supervised_pending(session.participant_id)
     if not pending:
@@ -120,4 +179,103 @@ def cancel_transaction(session: SessionToken = Depends(get_session)):
         "status":  "cancelled",
         "action":  action,
         "message": "Transaction cancelled. No changes were made to your account.",
+    }
+
+
+# ── POST /transactions/disburse ────────────────────────────────────────────────
+
+@router.post("/disburse")
+def disburse_transaction(body: DisburseRequest, session: SessionToken = Depends(get_session)):
+    """
+    Provide bank details and trigger disbursement.
+
+    Two flows depending on whether entry_id is supplied:
+
+    Supervised flow (no entry_id):
+      After POST /confirm returned awaiting_bank_details.
+      Uses the FAP token held in _disbursement_pending.
+
+    Human-review flow (entry_id provided):
+      After sponsor approved a hardship / in-service distribution.
+      Entry status must be approved_awaiting_bank_details.
+      Uses the FAP token stored in the queue entry at request time.
+
+    Bank details are used once and never stored.
+    """
+    _participant_only(session)
+
+    # Validate routing number — exactly 9 digits
+    if not re.match(r'^\d{9}$', body.routing_number):
+        raise HTTPException(400, "Routing number must be exactly 9 digits")
+
+    # Validate account number — 4 to 17 digits
+    if not re.match(r'^\d{4,17}$', body.account_number):
+        raise HTTPException(400, "Account number must be between 4 and 17 digits")
+
+    if body.entry_id:
+        # ── Human-review disbursement ──────────────────────────────────
+        rq_reload()
+        entry = get_entry(body.entry_id)
+        if not entry:
+            raise HTTPException(404, f"Queue entry '{body.entry_id}' not found")
+        if entry.participant_id != session.participant_id:
+            raise HTTPException(403, "This entry does not belong to your account")
+        if entry.status != "approved_awaiting_bank_details":
+            raise HTTPException(
+                400,
+                f"Entry '{body.entry_id}' is not awaiting bank details (status: {entry.status}). "
+                "It must be approved by your plan sponsor first."
+            )
+
+        tool = ExecuteTransactionTool()
+        raw = tool._run(
+            participant_id=session.participant_id,
+            action=entry.action,
+            payload_json=json.dumps(entry.payload),
+            fap_token=entry.fap_token,
+            autonomy_level="full",
+        )
+
+    else:
+        # ── Supervised disbursement ────────────────────────────────────
+        pending = _get_disbursement_pending(session.participant_id)
+        if not pending:
+            raise HTTPException(
+                404,
+                "No transaction awaiting disbursement. "
+                "Call POST /transactions/confirm first."
+            )
+
+        tool = ExecuteTransactionTool()
+        raw = tool._run(
+            participant_id=session.participant_id,
+            action=pending["action"],
+            payload_json=pending["payload_json"],
+            fap_token=pending["fap_token"],
+            autonomy_level="full",
+        )
+
+    try:
+        result = json.loads(raw)
+    except Exception:
+        result = {"status": "unknown", "raw": raw}
+
+    if "error" in result:
+        raise HTTPException(400, result["error"])
+
+    # Only mark entry as done / clear pending AFTER confirming execution succeeded
+    if body.entry_id:
+        finalize_disbursed(body.entry_id)
+    else:
+        _clear_disbursement_pending(session.participant_id)
+
+    return {
+        **result,
+        "disbursement": {
+            "routing_number":   body.routing_number,
+            "account_last4":    body.account_number[-4:],
+            "account_type":     body.account_type,
+            "status":           "initiated",
+            "estimated_arrival": "3–5 business days",
+        },
     }

@@ -162,7 +162,7 @@ The response will be a stream of lines. Each line starts with `data:` followed b
 
 ---
 
-## Step 4 — Confirm or Cancel a Loan (Supervised Flow)
+## Step 4 — Confirm a Loan (Supervised Flow)
 
 After sending the loan message in Step 3, the transaction is **waiting for your confirmation**. It has NOT executed yet.
 
@@ -175,28 +175,66 @@ You will see:
 {
   "has_pending": true,
   "action": "loan_initiation",
+  "requires_bank_details": true,
   "summary": {
     "amount": 10000,
     "repayment_years": 5,
-    "purpose": "general purpose"
+    "purpose": "general purpose",
+    "warning": "This loan reduces your retirement savings and accrues interest."
   },
-  "message": "FAP approved this transaction. All 12 ERISA rules passed..."
+  "message": "FAP approved this transaction. All 12 ERISA rules passed. Your explicit confirmation is required."
 }
 ```
 
-**To execute the loan:**
+**Step 4a — Confirm the loan:**
 
 `POST /transactions/confirm` → Try it out → Execute (no body needed)
 
-Response will say `"status": "executed"`.
+Because `loan_initiation` disburses funds, the response will be:
+```json
+{
+  "status": "awaiting_bank_details",
+  "action": "loan_initiation",
+  "message": "Transaction confirmed. Please provide your bank details to receive the funds."
+}
+```
 
-**To cancel the loan:**
+> Non-disbursement supervised actions (e.g. deferral to 0%) skip the bank details step and execute immediately with `"status": "executed"`.
+
+**Step 4b — Provide bank details to disburse funds:**
+
+`POST /transactions/disburse` → Try it out → body:
+```json
+{
+  "routing_number": "021000021",
+  "account_number": "123456789",
+  "account_type": "checking"
+}
+```
+
+Response:
+```json
+{
+  "status": "executed",
+  "disbursement": {
+    "routing_number": "021000021",
+    "account_last4": "6789",
+    "account_type": "checking",
+    "status": "initiated",
+    "estimated_arrival": "3–5 business days"
+  }
+}
+```
+
+Bank details are used once and **never stored**.
+
+**To cancel before confirming:**
 
 `POST /transactions/cancel` → Try it out → Execute (no body needed)
 
 Response will say `"status": "cancelled"`.
 
-> If `has_pending` is false, either the transaction already executed (full autonomy) or it was sent to the sponsor queue (human_review). Only supervised actions need confirm/cancel.
+> If `has_pending` is false, either the transaction already executed (full autonomy) or it was sent to the sponsor queue (human_review). Only supervised actions need confirm/cancel/disburse.
 
 ---
 
@@ -279,6 +317,31 @@ Shows all documents the participant uploaded, with LLM verification result and p
 { "note": "Approved — all documentation in order" }
 ```
 
+**For disbursement actions (hardship, in-service distribution)** the response will be:
+```json
+{
+  "status": "approved_awaiting_bank_details",
+  "entry_id": "AB12CD34",
+  "message": "Approved. Participant must now provide bank details via POST /transactions/disburse to receive funds."
+}
+```
+
+The request stays in `approved_awaiting_bank_details` status until the participant provides bank details.
+
+**Step 6d-ii — Participant provides bank details (re-login as participant first):**
+
+`POST /transactions/disburse` → body:
+```json
+{
+  "routing_number": "021000021",
+  "account_number": "123456789",
+  "account_type": "checking",
+  "entry_id": "AB12CD34"
+}
+```
+
+Include the `entry_id` from the queue entry. The funds will be disbursed and the queue entry moves to `approved`.
+
 ### Step 6e — Deny the request
 
 `POST /queue/{entry_id}/deny` → Try it out → fill in `entry_id` → body:
@@ -309,22 +372,30 @@ Shows every compliance decision (approved and denied) with rule details.
 
 ## Full Demo Sequence (end to end)
 
-Run these in order to see the complete participant → sponsor flow:
+### Sequence A — Supervised loan flow
+
+```
+1. Login as PART-008                          POST /auth/login
+2. Ask how much you can borrow                POST /chat  "How much can I borrow?"
+3. Request a loan                             POST /chat  "I want a $10,000 loan for 5 years"
+4. Check what is pending                      GET  /transactions/pending
+5. Confirm the loan                           POST /transactions/confirm  → awaiting_bank_details
+6. Provide bank details                       POST /transactions/disburse  {routing, account, type}
+```
+
+### Sequence B — Human-review hardship flow (full participant → sponsor → participant)
 
 ```
 1.  Login as PART-008                          POST /auth/login
-2.  Ask how much you can borrow                POST /chat  "How much can I borrow?"
-3.  Submit a hardship for medical              POST /chat  "I need $5,000 for medical expenses"
-4.  Upload the medical bill                    POST /documents/upload  (medical_bill.txt)
-5.  Re-login as sponsor                        POST /auth/login  (plan_sponsor)
-6.  See the pending queue                      GET  /queue
-7.  Check the documents                        GET  /queue/{entry_id}/docs
-8.  Approve the documents                      POST /queue/{entry_id}/approve-docs
-9.  Approve the request                        POST /queue/{entry_id}/approve
-10. Re-login as participant                    POST /auth/login  (participant)
-11. Request a loan                             POST /chat  "I want a $10,000 loan for 5 years"
-12. Check what is pending                      GET  /transactions/pending
-13. Confirm the loan                           POST /transactions/confirm
+2.  Submit a hardship for medical              POST /chat  "I need $5,000 for medical expenses"
+3.  Upload the medical bill                    POST /documents/upload  (medical_bill.txt)
+4.  Re-login as sponsor                        POST /auth/login  (plan_sponsor)
+5.  See the pending queue                      GET  /queue  — copy entry_id
+6.  Check the documents                        GET  /queue/{entry_id}/docs
+7.  Approve the documents                      POST /queue/{entry_id}/approve-docs
+8.  Approve the request                        POST /queue/{entry_id}/approve  → approved_awaiting_bank_details
+9.  Re-login as participant                    POST /auth/login  (participant)
+10. Provide bank details + entry_id            POST /transactions/disburse  {routing, account, type, entry_id}
 ```
 
 ---
@@ -336,5 +407,8 @@ Run these in order to see the complete participant → sponsor flow:
 | `401 Unauthorized` | Token expired or not set | Re-login and re-authorize |
 | `403 Forbidden` | Wrong role for this endpoint | Switch to the correct role and re-login |
 | `400 Documents must be reviewed` | Tried to approve request without approving docs first | Call approve-docs first |
-| `404 No pending transaction` | Nothing waiting for confirm | Check if loan was already executed or cancelled |
+| `404 No pending transaction` | Nothing waiting for confirm/disburse | Check if loan was already executed or cancelled |
+| `400 Routing number must be exactly 9 digits` | Invalid routing number format | Provide exactly 9 digits |
+| `400 Account number must be between 4 and 17 digits` | Invalid account number | Provide 4–17 digit account number |
+| `400 Entry is not awaiting bank details` | Tried to disburse before sponsor approval | Wait for sponsor to approve via POST /queue/{id}/approve first |
 | `400 Could not extract text` | File is empty or unreadable | Use one of the sample docs in `data/sample_docs/` |

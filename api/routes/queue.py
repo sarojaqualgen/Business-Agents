@@ -19,12 +19,17 @@ from api.auth import SessionToken, get_session
 from data import document_store as ds
 from data.review_queue import (
     approve,
+    approve_awaiting_bank,
     deny,
     get_all,
     get_entry,
     get_pending,
     reload as rq_reload,
 )
+
+# Actions that disburse funds — sponsor approval moves them to awaiting_bank_details
+# instead of fully approved, so participant can provide bank details next.
+_DISBURSEMENT_ACTIONS = {"loan_initiation", "hardship_distribution", "in_service_distribution"}
 
 router = APIRouter()
 
@@ -134,6 +139,13 @@ def approve_request(
     if not entry:
         raise HTTPException(404, f"Queue entry '{entry_id}' not found")
 
+    if entry.status != "pending":
+        raise HTTPException(
+            400,
+            f"Cannot approve entry '{entry_id}' — current status is '{entry.status}'. "
+            "Only pending entries can be approved."
+        )
+
     # Gate: hardship and QDRO require sponsor-approved documents first
     if entry.action in _DOC_REQUIRED:
         ds.reload()
@@ -146,6 +158,18 @@ def approve_request(
             )
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    if entry.action in _DISBURSEMENT_ACTIONS:
+        # Funds need to move — hold until participant provides bank details
+        result = approve_awaiting_bank(entry_id, sponsor_note=body.note or "", resolved_at=now)
+        if not result:
+            raise HTTPException(500, "Failed to approve entry")
+        return {
+            "status":   "approved_awaiting_bank_details",
+            "entry_id": entry_id,
+            "message":  "Approved. Participant must now provide bank details via POST /transactions/disburse to receive funds.",
+        }
+
     result = approve(entry_id, sponsor_note=body.note or "", resolved_at=now)
     if not result:
         raise HTTPException(500, "Failed to approve entry")
@@ -162,6 +186,13 @@ def deny_request(
     entry = get_entry(entry_id)
     if not entry:
         raise HTTPException(404, f"Queue entry '{entry_id}' not found")
+
+    if entry.status != "pending":
+        raise HTTPException(
+            400,
+            f"Cannot deny entry '{entry_id}' — current status is '{entry.status}'. "
+            "Only pending entries can be denied."
+        )
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     result = deny(entry_id, sponsor_note=body.note or "", resolved_at=now)
