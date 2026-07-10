@@ -2,6 +2,107 @@
 
 ---
 
+## What Is the Saga Pattern, Actually?
+
+Saga is a **design pattern**. Not a rollback feature, not an algorithm,
+not something specific to microservices. A design pattern is a reusable
+solution to a recurring problem in software design.
+
+**It was invented in 1987** by Hector Garcia-Molina and Kenneth Salem for
+long-lived database transactions — way before microservices existed. The
+name "saga" comes from the idea of a long story made up of multiple
+chapters, where each chapter can be undone.
+
+It became popular again in the 2010s because microservices made the problem
+much more common — but the pattern itself is not tied to microservices.
+
+---
+
+### The Core Problem Saga Solves
+
+In a normal database, if three operations fail halfway:
+
+```
+BEGIN
+  UPDATE accounts SET balance = balance - 5000
+  INSERT INTO transactions ...
+  UPDATE queue SET status = 'done'
+ROLLBACK   ← database undoes all three atomically. Clean.
+```
+
+But what if your three operations live in different places?
+
+```
+Operation 1 → Python set in memory      (token store)
+Operation 2 → Python dict in memory     (participant state)
+Operation 3 → JSON file on disk         (queue entry)
+```
+
+There is no single ROLLBACK that covers all three. They are three separate
+storage mechanisms. If Operation 2 fails, Operation 1 already happened and
+there is no automatic undo.
+
+**Saga's answer:** For every forward step that has a side effect, you write
+a compensating action — a specific piece of code that logically reverses
+that side effect. If a later step fails, you run the compensating actions
+for all earlier steps in reverse order.
+
+```
+Step 1 forward:      consume token → _consumed_tokens.add(jti)
+Step 1 compensate:   unconsume token → _consumed_tokens.discard(jti)
+
+Step 2 forward:      apply override → participant state updated
+Step 2 compensate:   not needed if Step 2 itself is the one that fails
+                     (we handle its failure with try/except before any
+                     irreversible side effect happens)
+
+Step 3 forward:      finalize entry → status = "approved"
+Step 3 compensate:   not needed — we only run Step 3 after Steps 1 and 2
+                     have fully succeeded
+```
+
+---
+
+### Is It Rollback?
+
+Rollback is a database primitive — one instruction that atomically undoes
+a set of changes that were part of the same database transaction.
+
+Saga is a pattern built on top of application code. It achieves the same
+goal (getting the system back to a consistent state) but through explicit
+compensating actions written by the developer, not through a database
+engine.
+
+Rollback = one instruction, handled by the database.
+Saga = you write the undo logic yourself, step by step.
+
+---
+
+### Is It a Microservices Thing?
+
+No. Saga is used heavily in microservices because each service has its own
+database and you literally cannot do a cross-service ROLLBACK. But the
+pattern applies anywhere you have multiple sequential operations that
+cannot share one atomic transaction — including a single Python process
+with multiple storage mechanisms, which is exactly our situation.
+
+---
+
+### Two Types of Saga
+
+**Choreography** — each step emits an event, the next step listens for it
+and reacts. No central controller. Used in event-driven systems.
+
+**Orchestration** — one central piece of code calls each step in order and
+decides what compensating actions to run on failure. Used when one function
+coordinates the whole flow.
+
+We use **orchestration**. The `disburse_transaction()` function in
+`api/routes/transactions.py` is the orchestrator — it calls each step,
+checks the result, and runs compensating actions if needed.
+
+---
+
 ## The Problem We Had (Before This Fix)
 
 A participant submitted a hardship withdrawal request. Here is what happened step by step:
