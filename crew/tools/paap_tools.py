@@ -206,23 +206,33 @@ class ExecuteTransactionTool(BaseTool):
 
         # Apply session-level overrides so the CLI immediately reflects the change
         # without a DB write (Phase 6 pending).
-        if action == "investment_reallocation":
-            from data.participants import apply_investment_override
-            from agents.paap.models import InvestmentElection as _IE
-            new_elections = [
-                _IE(fund_id=e["fund_id"], allocation_pct=float(e["allocation_pct"]))
-                for e in payload.get("elections", [])
-            ]
-            if new_elections:
-                apply_investment_override(participant_id, new_elections)
+        # Wrapped in try/except: if the override fails after token was consumed,
+        # un-consume the token so the participant can retry without re-initiating.
+        try:
+            if action == "investment_reallocation":
+                from data.participants import apply_investment_override
+                from agents.paap.models import InvestmentElection as _IE
+                new_elections = [
+                    _IE(fund_id=e["fund_id"], allocation_pct=float(e["allocation_pct"]))
+                    for e in payload.get("elections", [])
+                ]
+                if new_elections:
+                    apply_investment_override(participant_id, new_elections)
 
-        if action == "deferral_change" and "new_deferral_pct" in payload:
-            from data.participants import apply_deferral_override
-            apply_deferral_override(
-                participant_id,
-                float(payload["new_deferral_pct"]),
-                deferral_type=payload.get("deferral_type"),
-            )
+            if action == "deferral_change" and "new_deferral_pct" in payload:
+                from data.participants import apply_deferral_override
+                apply_deferral_override(
+                    participant_id,
+                    float(payload["new_deferral_pct"]),
+                    deferral_type=payload.get("deferral_type"),
+                )
+        except Exception as exc:
+            # Rollback: un-consume the token so the participant can retry
+            from agents.fap.tokens import unconsume_token
+            unconsume_token(fap_token)
+            record("ExecuteTransaction", f"{participant_id}  {action}",
+                   f"ROLLBACK  token restored  reason={exc}")
+            return _json.dumps({"error": f"Execution failed and was rolled back: {exc}. Your token has been restored — retry is safe."})
 
         return _json.dumps({
             "status": "executed",

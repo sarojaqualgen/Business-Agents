@@ -103,3 +103,16 @@ def validate_token(
 def revoke_token(token_id: str) -> None:
     """Mark a token as consumed so it cannot be used."""
     _consumed_tokens.add(token_id)
+
+
+def unconsume_token(token_str: str) -> None:
+    """Remove a token from the consumed set — rollback compensation if execution fails
+    after consumption. Allows the participant to retry with the same token."""
+    try:
+        claims = jwt.decode(
+            token_str, _SECRET, algorithms=[_ALGORITHM],
+            options={"verify_exp": False},  # decode even if expired, just need the jti
+        )
+        _consumed_tokens.discard(claims.get("jti", ""))
+    except Exception:
+        pass

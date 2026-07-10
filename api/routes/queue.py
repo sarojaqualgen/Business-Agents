@@ -24,6 +24,7 @@ from data.review_queue import (
     get_all,
     get_entry,
     get_pending,
+    reissue_bank_token,
     reload as rq_reload,
 )
 
@@ -138,6 +139,18 @@ def approve_request(
     entry = get_entry(entry_id)
     if not entry:
         raise HTTPException(404, f"Queue entry '{entry_id}' not found")
+
+    # Special case: entry was already approved but FAP token expired before participant
+    # provided bank details. Sponsor re-approves to issue a fresh token — no re-review needed.
+    if entry.status == "approved_awaiting_bank_details":
+        result = reissue_bank_token(entry_id)
+        if not result:
+            raise HTTPException(500, "Failed to re-issue token")
+        return {
+            "status":   "approved_awaiting_bank_details",
+            "entry_id": entry_id,
+            "message":  "Token re-issued. Participant has a fresh 24-hour window to provide bank details via POST /transactions/disburse.",
+        }
 
     if entry.status != "pending":
         raise HTTPException(

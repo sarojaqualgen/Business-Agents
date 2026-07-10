@@ -342,6 +342,59 @@ The request stays in `approved_awaiting_bank_details` status until the participa
 
 Include the `entry_id` from the queue entry. The funds will be disbursed and the queue entry moves to `approved`.
 
+---
+
+### What If the Participant Comes Back the Next Day? (FAP Token Expired)
+
+The FAP token issued at approval time has a 24-hour TTL. If the participant
+does not provide bank details within 24 hours of the sponsor approving, the
+token expires and `/transactions/disburse` returns:
+
+```json
+{ "detail": "FAP token validation failed: Token has expired." }
+```
+
+The queue entry stays at `approved_awaiting_bank_details` — it is NOT stuck.
+The sponsor simply approves again to re-issue a fresh token. No re-review needed.
+
+**Step 1 — Sponsor calls approve again (re-login as sponsor):**
+
+`POST /queue/{entry_id}/approve` → same body as before:
+```json
+{ "note": "Re-issuing token — participant missed the window" }
+```
+
+Because the entry is already `approved_awaiting_bank_details` (not `pending`),
+the system skips the full approval flow and only re-issues the FAP token:
+
+```json
+{
+  "status": "approved_awaiting_bank_details",
+  "entry_id": "AB12CD34",
+  "message": "Token re-issued. Participant has a fresh 24-hour window to provide bank details via POST /transactions/disburse."
+}
+```
+
+**Step 2 — Participant calls disburse again (re-login as participant):**
+
+`POST /transactions/disburse` → same body with `entry_id`:
+```json
+{
+  "routing_number": "021000021",
+  "account_number": "123456789",
+  "account_type": "checking",
+  "entry_id": "AB12CD34"
+}
+```
+
+Fresh token is valid → transaction executes → entry moves to `approved`.
+
+> The sponsor does not need to re-check documents or re-review the request.
+> Calling approve on an `approved_awaiting_bank_details` entry only re-issues
+> the token — the approval decision itself does not change.
+
+---
+
 ### Step 6e — Deny the request
 
 `POST /queue/{entry_id}/deny` → Try it out → fill in `entry_id` → body:
@@ -411,4 +464,5 @@ Shows every compliance decision (approved and denied) with rule details.
 | `400 Routing number must be exactly 9 digits` | Invalid routing number format | Provide exactly 9 digits |
 | `400 Account number must be between 4 and 17 digits` | Invalid account number | Provide 4–17 digit account number |
 | `400 Entry is not awaiting bank details` | Tried to disburse before sponsor approval | Wait for sponsor to approve via POST /queue/{id}/approve first |
+| `400 FAP token validation failed: Token has expired` | 24-hour window passed after sponsor approval | Sponsor calls POST /queue/{id}/approve again — re-issues fresh token, no re-review needed |
 | `400 Could not extract text` | File is empty or unreadable | Use one of the sample docs in `data/sample_docs/` |

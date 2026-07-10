@@ -162,6 +162,30 @@ def approve_awaiting_bank(entry_id: str, sponsor_note: str = "", resolved_at: st
     return entry
 
 
+def reissue_bank_token(entry_id: str) -> Optional[ReviewQueueEntry]:
+    """Re-issue a fresh FAP token for an entry already in approved_awaiting_bank_details.
+    Called when the previous token expired before the participant provided bank details.
+    Status stays approved_awaiting_bank_details — sponsor does not need to re-review."""
+    entry = next((e for e in _queue if e.entry_id == entry_id and e.status == "approved_awaiting_bank_details"), None)
+    if entry:
+        try:
+            from agents.fap.tokens import issue_token
+            from agents.fap.models import ActionType, AutonomyLevel
+            new_token, _, _ = issue_token(
+                agent_id=entry.agent_id,
+                participant_id=entry.participant_id,
+                plan_id=entry.plan_id,
+                action=ActionType(entry.action),
+                autonomy_level=AutonomyLevel.human_review,
+                payload=entry.payload,
+            )
+            entry.fap_token = new_token
+            _save()
+        except Exception:
+            pass
+    return entry
+
+
 def finalize_disbursed(entry_id: str) -> Optional[ReviewQueueEntry]:
     """Mark entry as fully disbursed after participant provides bank details."""
     entry = next((e for e in _queue if e.entry_id == entry_id and e.status == "approved_awaiting_bank_details"), None)
