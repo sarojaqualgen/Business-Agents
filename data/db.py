@@ -403,6 +403,11 @@ def consume_token(token_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def write_audit_record(record: FapAuditRecord) -> None:
+    outcome = "approved" if record.authorized else "denied"
+    principal_type = record.principal_type.value if hasattr(record.principal_type, "value") else record.principal_type
+    autonomy_level = record.autonomy_level.value if record.autonomy_level and hasattr(record.autonomy_level, "value") else record.autonomy_level
+    denial_code = record.denial_code.value if record.denial_code and hasattr(record.denial_code, "value") else record.denial_code
+
     with _conn() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -410,32 +415,28 @@ def write_audit_record(record: FapAuditRecord) -> None:
             INSERT INTO fap_audit_log (
                 audit_id, created_at, agent_id, principal_type, participant_id, plan_id,
                 action, payload_hash, outcome, autonomy_level, denial_code, erisa_citation,
-                master_ref_section, rules_passed, rule_failed, conditions, token_id, request_id
+                master_ref_section, token_id
             ) VALUES (
                 %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s
+                %s, %s
             )
             """,
             (
                 record.audit_id,
                 record.timestamp,
                 record.agent_id,
-                record.principal_type.value if hasattr(record.principal_type, "value") else record.principal_type,
+                principal_type,
                 record.participant_id,
                 record.plan_id,
-                record.action.value if hasattr(record.action, "value") else record.action,
-                record.payload_hash,
-                record.outcome,
-                record.autonomy_level.value if record.autonomy_level and hasattr(record.autonomy_level, "value") else record.autonomy_level,
-                record.denial_code.value if record.denial_code and hasattr(record.denial_code, "value") else record.denial_code,
+                record.action,
+                "",        # payload_hash — FapAuditRecord intentionally omits payload (may contain PII)
+                outcome,
+                autonomy_level,
+                denial_code,
                 record.erisa_citation,
                 record.master_ref_section,
-                record.rules_passed or [],
-                record.rule_failed,
-                record.conditions or [],
                 record.token_id,
-                None,  # request_id — set by FastAPI layer
             ),
         )
 
@@ -619,3 +620,306 @@ def hash_ssn(ssn: str) -> str:
     """One-way hash for SSN storage. Never store raw SSN."""
     cleaned = ssn.replace("-", "").replace(" ", "")
     return hashlib.sha256(cleaned.encode()).hexdigest()
+
+
+def _db_ok() -> bool:
+    """True if DATABASE_URL is set and the pool can be obtained."""
+    try:
+        _get_pool()
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — transactions
+# ---------------------------------------------------------------------------
+
+def record_transaction(
+    participant_id: str,
+    plan_id: str,
+    action: str,
+    amount: Optional[Decimal] = None,
+    payload: Optional[dict] = None,
+    fap_token_id: Optional[str] = None,
+    autonomy_level: Optional[str] = None,
+    queue_entry_id: Optional[str] = None,
+) -> str:
+    """Insert a transaction record after execution. Returns transaction_id UUID."""
+    transaction_id = str(uuid.uuid4())
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO transactions
+                (transaction_id, participant_id, plan_id, action, amount, payload,
+                 fap_token_id, autonomy_level, queue_entry_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (transaction_id, participant_id, plan_id, action, amount,
+             json.dumps(payload) if payload else None,
+             fap_token_id, autonomy_level, queue_entry_id),
+        )
+    return transaction_id
+
+
+def decrement_vested_balance(participant_id: str, amount: Decimal) -> None:
+    """Reduce vested_balance after a disbursement. Clamped to 0."""
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE participants
+            SET vested_balance = GREATEST(vested_balance - %s, 0)
+            WHERE participant_id = %s
+            """,
+            (amount, participant_id),
+        )
+
+
+def create_loan_record(
+    participant_id: str,
+    plan_id: str,
+    amount: Decimal,
+    repayment_years: int,
+    interest_rate: Decimal = Decimal("0.085"),
+) -> str:
+    """Insert a new loan into participant_loans after loan_initiation disburse.
+    Returns loan_id. Interest rate defaults to 8.5% — recordkeeper sets actual rate in Phase 5."""
+    from datetime import date as _date
+    loan_id = f"LOAN-{str(uuid.uuid4())[:6].upper()}"
+    today = _date.today()
+    maturity = _date(today.year + repayment_years, today.month, today.day)
+    n = repayment_years * 12
+    r = float(interest_rate) / 12
+    payment = float(amount) * (r * (1 + r) ** n) / ((1 + r) ** n - 1) if r > 0 else float(amount) / n
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO participant_loans
+                (loan_id, participant_id, plan_id, loan_type,
+                 original_amount, outstanding_balance, highest_balance_last_12_months,
+                 interest_rate, origination_date, maturity_date,
+                 payment_amount, payment_frequency, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (loan_id, participant_id, plan_id, "general",
+             amount, amount, amount,
+             interest_rate, today, maturity,
+             Decimal(str(round(payment, 2))), "monthly", "active"),
+        )
+    return loan_id
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — review queue
+# ---------------------------------------------------------------------------
+
+def write_review_queue_entry(
+    entry_id: str,
+    participant_id: str,
+    plan_id: str,
+    agent_id: str,
+    principal_type: str,
+    action: str,
+    payload: dict,
+    fap_audit_id: str,
+    fap_token: str,
+    created_at: str,
+) -> None:
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO review_queue
+                (entry_id, participant_id, plan_id, agent_id, principal_type,
+                 action, payload, fap_audit_id, fap_token, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (entry_id, participant_id, plan_id, agent_id, principal_type,
+             action, json.dumps(payload), fap_audit_id, fap_token, created_at),
+        )
+
+
+def get_review_queue_entry(entry_id: str) -> Optional[dict]:
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM review_queue WHERE entry_id = %s", (entry_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def get_review_queue_pending(plan_id: Optional[str] = None) -> list[dict]:
+    with _conn() as conn:
+        cur = conn.cursor()
+        if plan_id:
+            cur.execute(
+                "SELECT * FROM review_queue WHERE status = 'pending' AND plan_id = %s ORDER BY created_at",
+                (plan_id,),
+            )
+        else:
+            cur.execute("SELECT * FROM review_queue WHERE status = 'pending' ORDER BY created_at")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_all_review_queue(plan_id: Optional[str] = None) -> list[dict]:
+    with _conn() as conn:
+        cur = conn.cursor()
+        if plan_id:
+            cur.execute(
+                "SELECT * FROM review_queue WHERE plan_id = %s ORDER BY created_at DESC",
+                (plan_id,),
+            )
+        else:
+            cur.execute("SELECT * FROM review_queue ORDER BY created_at DESC")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def update_review_queue_status(
+    entry_id: str,
+    new_status: str,
+    sponsor_note: str = "",
+    resolved_at: Optional[str] = None,
+    match_status: Optional[str] = None,
+) -> bool:
+    """Update queue entry status. If match_status is set, only updates if current status matches."""
+    with _conn() as conn:
+        cur = conn.cursor()
+        if match_status:
+            cur.execute(
+                """
+                UPDATE review_queue
+                SET status = %s, sponsor_note = %s, resolved_at = %s
+                WHERE entry_id = %s AND status = %s
+                """,
+                (new_status, sponsor_note, resolved_at, entry_id, match_status),
+            )
+        else:
+            cur.execute(
+                "UPDATE review_queue SET status = %s, sponsor_note = %s, resolved_at = %s WHERE entry_id = %s",
+                (new_status, sponsor_note, resolved_at, entry_id),
+            )
+        return cur.rowcount == 1
+
+
+def update_review_queue_token(entry_id: str, new_fap_token: str) -> bool:
+    """Replace the stored FAP token (used for re-issue on sponsor approval)."""
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE review_queue SET fap_token = %s WHERE entry_id = %s",
+            (new_fap_token, entry_id),
+        )
+        return cur.rowcount == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — documents
+# ---------------------------------------------------------------------------
+
+def write_document_record(
+    doc_id: str,
+    participant_id: str,
+    plan_id: str,
+    queue_entry_id: str,
+    action_type: str,
+    expense_type: str,
+    doc_type: str,
+    filename: str,
+    content_preview: str,
+    object_key: str,
+    uploaded_at: str,
+) -> None:
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO documents
+                (doc_id, participant_id, plan_id, queue_entry_id, action_type,
+                 expense_type, doc_type, filename, content_preview, object_key, uploaded_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (doc_id, participant_id, plan_id, queue_entry_id, action_type,
+             expense_type, doc_type, filename, content_preview, object_key, uploaded_at),
+        )
+
+
+def get_documents_by_entry(queue_entry_id: str) -> list[dict]:
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM documents WHERE queue_entry_id = %s ORDER BY uploaded_at",
+            (queue_entry_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_documents_by_participant(participant_id: str) -> list[dict]:
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM documents WHERE participant_id = %s ORDER BY uploaded_at DESC",
+            (participant_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def mark_document_verified_db(doc_id: str, verified: bool, note: str, verified_at: str) -> bool:
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE documents SET verified = %s, verification_note = %s, verified_at = %s WHERE doc_id = %s",
+            (verified, note, verified_at, doc_id),
+        )
+        return cur.rowcount == 1
+
+
+def approve_document_by_sponsor_db(entry_id: str, note: str, approved_at: str) -> int:
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE documents
+            SET sponsor_doc_approved = TRUE, sponsor_doc_note = %s, sponsor_doc_approved_at = %s
+            WHERE queue_entry_id = %s
+            """,
+            (note, approved_at, entry_id),
+        )
+        return cur.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — token unconsume (saga rollback compensation)
+# ---------------------------------------------------------------------------
+
+def unconsume_token_db(token_id: str) -> None:
+    """Reverse a token consumption — saga rollback when execution fails after token was consumed."""
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE fap_tokens SET consumed = FALSE, consumed_at = NULL WHERE token_id = %s",
+            (token_id,),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — audit log reads
+# ---------------------------------------------------------------------------
+
+def get_all_audit_records_db(limit: int = 500) -> list[dict]:
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM fap_audit_log ORDER BY created_at DESC LIMIT %s",
+            (limit,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_audit_record_db(audit_id: str) -> Optional[dict]:
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM fap_audit_log WHERE audit_id = %s", (audit_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None

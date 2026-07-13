@@ -17,6 +17,7 @@ Flow for HUMAN_REVIEW disbursement actions (hardship_distribution, in_service_di
 
 import json
 import re
+from decimal import Decimal
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -35,6 +36,61 @@ router = APIRouter()
 # Actions that disburse funds to a bank account — require bank details step.
 # deferral_change and investment_reallocation are supervised but move no external funds.
 DISBURSEMENT_ACTIONS = {"loan_initiation", "hardship_distribution", "in_service_distribution"}
+
+
+def _record_execution(
+    participant_id: str,
+    plan_id: str,
+    action: str,
+    payload: dict,
+    fap_token: str,
+    autonomy_level: str,
+    queue_entry_id: Optional[str] = None,
+) -> None:
+    """
+    After a successful PAAP execution: write to transactions table, decrement
+    vested_balance for disbursement actions, and create a loan record for
+    loan_initiation. All DB calls are best-effort — failure is logged silently
+    so the participant response is never blocked by a write failure.
+    """
+    try:
+        import jwt as _jwt
+        import os
+        _SECRET = os.getenv("FAP_JWT_SECRET", "dev-only-insecure-secret-change-in-production")
+        claims = _jwt.decode(fap_token, _SECRET, algorithms=["HS256"], options={"verify_exp": False})
+        token_id = claims.get("jti", "")
+    except Exception:
+        token_id = ""
+
+    try:
+        from data import db  # noqa: PLC0415
+        amount = payload.get("amount")
+        amount_dec = Decimal(str(amount)) if amount is not None else None
+
+        db.record_transaction(
+            participant_id=participant_id,
+            plan_id=plan_id,
+            action=action,
+            amount=amount_dec,
+            payload=payload,
+            fap_token_id=token_id,
+            autonomy_level=autonomy_level,
+            queue_entry_id=queue_entry_id,
+        )
+
+        if action in DISBURSEMENT_ACTIONS and amount_dec:
+            db.decrement_vested_balance(participant_id=participant_id, amount=amount_dec)
+
+        if action == "loan_initiation" and amount_dec:
+            repayment_years = int(payload.get("repayment_years", 5))
+            db.create_loan_record(
+                participant_id=participant_id,
+                plan_id=plan_id,
+                amount=amount_dec,
+                repayment_years=repayment_years,
+            )
+    except Exception:
+        pass
 
 # In-memory store: participant_id → {action, payload, payload_json, fap_token}
 # Populated by POST /confirm for disbursement actions.
@@ -160,6 +216,14 @@ def confirm_transaction(session: SessionToken = Depends(get_session)):
     if "error" in result:
         raise HTTPException(400, result["error"])
 
+    _record_execution(
+        participant_id=session.participant_id,
+        plan_id=session.plan_id or "",
+        action=action,
+        payload=pending.get("payload", {}),
+        fap_token=pending["fap_token"],
+        autonomy_level="supervised",
+    )
     return result
 
 
@@ -266,8 +330,25 @@ def disburse_transaction(body: DisburseRequest, session: SessionToken = Depends(
     # Only mark entry as done / clear pending AFTER confirming execution succeeded
     if body.entry_id:
         finalize_disbursed(body.entry_id)
+        _record_execution(
+            participant_id=session.participant_id,
+            plan_id=entry.plan_id,
+            action=entry.action,
+            payload=entry.payload,
+            fap_token=entry.fap_token,
+            autonomy_level="human_review",
+            queue_entry_id=body.entry_id,
+        )
     else:
         _clear_disbursement_pending(session.participant_id)
+        _record_execution(
+            participant_id=session.participant_id,
+            plan_id=session.plan_id or "",
+            action=pending["action"],
+            payload=pending.get("payload", {}),
+            fap_token=pending["fap_token"],
+            autonomy_level="supervised",
+        )
 
     return {
         **result,

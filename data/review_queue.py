@@ -2,8 +2,8 @@
 Human Review Queue — stores transactions that FAP approved but flagged as autonomy_level=human_review.
 Plan sponsor must approve or deny each entry before execution proceeds.
 
-In production: database table with email/Slack notifications and 18-month QDRO window tracking.
-Demo: persists to review_queue_state.json so the queue survives Ctrl+C / session restarts.
+Phase 6: primary persistence is PostgreSQL (via data/db.py).
+Falls back to in-memory list + review_queue_state.json if DATABASE_URL is not set.
 """
 
 from dataclasses import dataclass
@@ -25,15 +25,18 @@ class ReviewQueueEntry:
     action: str
     payload: dict[str, Any]
     fap_audit_id: str
-    fap_token: str              # stored until sponsor approves; 5-min TTL in prod → re-issue on approval
-    status: str                 # "pending" | "approved" | "denied"
+    fap_token: str              # stored until sponsor approves; re-issued on approval
+    status: str                 # "pending" | "approved" | "denied" | "approved_awaiting_bank_details"
     sponsor_note: str
     created_at: str
     resolved_at: Optional[str] = None
 
 
+# In-memory fallback
 _queue: list[ReviewQueueEntry] = []
 
+
+# ── JSON fallback helpers ────────────────────────────────────────────────────
 
 def _save() -> None:
     data = [
@@ -68,11 +71,31 @@ def _load() -> None:
         for d in data:
             _queue.append(ReviewQueueEntry(**d))
     except Exception:
-        pass  # corrupt file — start fresh
+        pass
+
+
+def _row_to_entry(r: dict) -> ReviewQueueEntry:
+    return ReviewQueueEntry(
+        entry_id=str(r["entry_id"]),
+        participant_id=r.get("participant_id", ""),
+        plan_id=r.get("plan_id", ""),
+        agent_id=r.get("agent_id", ""),
+        principal_type=r.get("principal_type", "participant"),
+        action=r.get("action", ""),
+        payload=r.get("payload") or {},
+        fap_audit_id=r.get("fap_audit_id", ""),
+        fap_token=r.get("fap_token", ""),
+        status=r.get("status", "pending"),
+        sponsor_note=r.get("sponsor_note", ""),
+        created_at=str(r.get("created_at", "")),
+        resolved_at=str(r["resolved_at"]) if r.get("resolved_at") else None,
+    )
 
 
 _load()
 
+
+# ── Public API ───────────────────────────────────────────────────────────────
 
 def enqueue(
     participant_id: str,
@@ -86,6 +109,27 @@ def enqueue(
     created_at: str,
 ) -> str:
     entry_id = str(uuid.uuid4())[:8].upper()
+
+    # Try DB first
+    try:
+        from data import db  # noqa: PLC0415
+        db.write_review_queue_entry(
+            entry_id=entry_id,
+            participant_id=participant_id,
+            plan_id=plan_id,
+            agent_id=agent_id,
+            principal_type=principal_type,
+            action=action,
+            payload=payload,
+            fap_audit_id=fap_audit_id,
+            fap_token=fap_token,
+            created_at=created_at,
+        )
+        return entry_id
+    except Exception:
+        pass
+
+    # Fallback: in-memory + JSON
     _queue.append(ReviewQueueEntry(
         entry_id=entry_id,
         participant_id=participant_id,
@@ -105,26 +149,58 @@ def enqueue(
 
 
 def get_pending() -> list[ReviewQueueEntry]:
+    try:
+        from data import db  # noqa: PLC0415
+        rows = db.get_review_queue_pending()
+        return [_row_to_entry(r) for r in rows]
+    except Exception:
+        pass
     return [e for e in _queue if e.status == "pending"]
 
 
 def get_all() -> list[ReviewQueueEntry]:
+    try:
+        from data import db  # noqa: PLC0415
+        rows = db.get_all_review_queue()
+        return [_row_to_entry(r) for r in rows]
+    except Exception:
+        pass
     return list(_queue)
 
 
 def reload() -> None:
-    """Re-read the queue from disk. Call before status checks so sponsor approvals
-    made in a different session are immediately visible."""
+    """Re-read the queue (from DB if available, otherwise from JSON).
+    Call before status checks so sponsor actions in another session are visible."""
     global _queue
     _queue.clear()
     _load()
 
 
 def get_entry(entry_id: str) -> Optional[ReviewQueueEntry]:
+    try:
+        from data import db  # noqa: PLC0415
+        row = db.get_review_queue_entry(entry_id)
+        if row:
+            return _row_to_entry(row)
+        return None
+    except Exception:
+        pass
     return next((e for e in _queue if e.entry_id == entry_id), None)
 
 
 def approve(entry_id: str, sponsor_note: str = "", resolved_at: str = "") -> Optional[ReviewQueueEntry]:
+    try:
+        from data import db  # noqa: PLC0415
+        db.update_review_queue_status(
+            entry_id=entry_id,
+            new_status="approved",
+            sponsor_note=sponsor_note,
+            resolved_at=resolved_at,
+        )
+        return get_entry(entry_id)
+    except Exception:
+        pass
+
     entry = next((e for e in _queue if e.entry_id == entry_id and e.status == "pending"), None)
     if entry:
         entry.status = "approved"
@@ -135,59 +211,96 @@ def approve(entry_id: str, sponsor_note: str = "", resolved_at: str = "") -> Opt
 
 
 def approve_awaiting_bank(entry_id: str, sponsor_note: str = "", resolved_at: str = "") -> Optional[ReviewQueueEntry]:
-    """Approve a disbursement action but hold it until participant provides bank details.
-    Re-issues a fresh FAP token so the participant has a full window to respond after approval."""
-    entry = next((e for e in _queue if e.entry_id == entry_id and e.status == "pending"), None)
-    if entry:
-        # Original token was issued during chat and may have expired by the time sponsor approves.
-        # Re-issue so participant gets a fresh token starting from approval time.
-        try:
-            from agents.fap.tokens import issue_token
-            from agents.fap.models import ActionType, AutonomyLevel
-            new_token, _, _ = issue_token(
-                agent_id=entry.agent_id,
-                participant_id=entry.participant_id,
-                plan_id=entry.plan_id,
-                action=ActionType(entry.action),
-                autonomy_level=AutonomyLevel.human_review,
-                payload=entry.payload,
-            )
-            entry.fap_token = new_token
-        except Exception:
-            pass  # keep original token if re-issue fails
-        entry.status = "approved_awaiting_bank_details"
-        entry.sponsor_note = sponsor_note
-        entry.resolved_at = resolved_at
+    """Approve a disbursement action; re-issue a fresh FAP token so participant has a full window."""
+    # Fetch current entry to build token re-issue inputs
+    entry = get_entry(entry_id)
+    if not entry or entry.status != "pending":
+        return entry
+
+    new_token = entry.fap_token
+    try:
+        from agents.fap.tokens import issue_token
+        from agents.fap.models import ActionType, AutonomyLevel
+        new_token, _, _ = issue_token(
+            agent_id=entry.agent_id,
+            participant_id=entry.participant_id,
+            plan_id=entry.plan_id,
+            action=ActionType(entry.action),
+            autonomy_level=AutonomyLevel.human_review,
+            payload=entry.payload,
+        )
+    except Exception:
+        pass
+
+    # Persist new token then update status
+    try:
+        from data import db  # noqa: PLC0415
+        db.update_review_queue_token(entry_id, new_token)
+        db.update_review_queue_status(
+            entry_id=entry_id,
+            new_status="approved_awaiting_bank_details",
+            sponsor_note=sponsor_note,
+            resolved_at=resolved_at,
+        )
+        return get_entry(entry_id)
+    except Exception:
+        pass
+
+    # Fallback
+    mem_entry = next((e for e in _queue if e.entry_id == entry_id and e.status == "pending"), None)
+    if mem_entry:
+        mem_entry.fap_token = new_token
+        mem_entry.status = "approved_awaiting_bank_details"
+        mem_entry.sponsor_note = sponsor_note
+        mem_entry.resolved_at = resolved_at
         _save()
-    return entry
+    return mem_entry
 
 
 def reissue_bank_token(entry_id: str) -> Optional[ReviewQueueEntry]:
-    """Re-issue a fresh FAP token for an entry already in approved_awaiting_bank_details.
-    Called when the previous token expired before the participant provided bank details.
-    Status stays approved_awaiting_bank_details — sponsor does not need to re-review."""
-    entry = next((e for e in _queue if e.entry_id == entry_id and e.status == "approved_awaiting_bank_details"), None)
-    if entry:
+    """Re-issue a fresh FAP token for an entry already in approved_awaiting_bank_details."""
+    entry = get_entry(entry_id)
+    if not entry or entry.status != "approved_awaiting_bank_details":
+        return entry
+    try:
+        from agents.fap.tokens import issue_token
+        from agents.fap.models import ActionType, AutonomyLevel
+        new_token, _, _ = issue_token(
+            agent_id=entry.agent_id,
+            participant_id=entry.participant_id,
+            plan_id=entry.plan_id,
+            action=ActionType(entry.action),
+            autonomy_level=AutonomyLevel.human_review,
+            payload=entry.payload,
+        )
         try:
-            from agents.fap.tokens import issue_token
-            from agents.fap.models import ActionType, AutonomyLevel
-            new_token, _, _ = issue_token(
-                agent_id=entry.agent_id,
-                participant_id=entry.participant_id,
-                plan_id=entry.plan_id,
-                action=ActionType(entry.action),
-                autonomy_level=AutonomyLevel.human_review,
-                payload=entry.payload,
-            )
-            entry.fap_token = new_token
-            _save()
+            from data import db  # noqa: PLC0415
+            db.update_review_queue_token(entry_id, new_token)
         except Exception:
             pass
-    return entry
+        mem_entry = next((e for e in _queue if e.entry_id == entry_id), None)
+        if mem_entry:
+            mem_entry.fap_token = new_token
+            _save()
+    except Exception:
+        pass
+    return get_entry(entry_id)
 
 
 def finalize_disbursed(entry_id: str) -> Optional[ReviewQueueEntry]:
     """Mark entry as fully disbursed after participant provides bank details."""
+    try:
+        from data import db  # noqa: PLC0415
+        db.update_review_queue_status(
+            entry_id=entry_id,
+            new_status="approved",
+            sponsor_note="",
+            resolved_at="",
+        )
+        return get_entry(entry_id)
+    except Exception:
+        pass
+
     entry = next((e for e in _queue if e.entry_id == entry_id and e.status == "approved_awaiting_bank_details"), None)
     if entry:
         entry.status = "approved"
@@ -196,6 +309,18 @@ def finalize_disbursed(entry_id: str) -> Optional[ReviewQueueEntry]:
 
 
 def deny(entry_id: str, sponsor_note: str = "", resolved_at: str = "") -> Optional[ReviewQueueEntry]:
+    try:
+        from data import db  # noqa: PLC0415
+        db.update_review_queue_status(
+            entry_id=entry_id,
+            new_status="denied",
+            sponsor_note=sponsor_note,
+            resolved_at=resolved_at,
+        )
+        return get_entry(entry_id)
+    except Exception:
+        pass
+
     entry = next((e for e in _queue if e.entry_id == entry_id and e.status == "pending"), None)
     if entry:
         entry.status = "denied"

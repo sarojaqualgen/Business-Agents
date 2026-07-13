@@ -2,10 +2,14 @@
 FAP JWT token issuance and validation.
 
 Tokens are:
-- Signed with a plan-level secret (mock: env var FAP_JWT_SECRET)
+- Signed with a plan-level secret (env var FAP_JWT_SECRET)
 - Scoped to: agent_id, participant_id, plan_id, action, payload_hash
-- Single-use: consumed tokens are tracked in an in-memory set (production: Redis)
-- TTL: 300 seconds
+- Single-use: tracked in PostgreSQL fap_tokens table (fallback: in-memory set)
+- TTL: 24 hours — human_review entries need time for sponsor + participant steps
+
+Phase 6: issue_token() writes to fap_tokens, validate_token() uses atomic
+db.consume_token(), unconsume_token() writes to db for saga rollback.
+Falls back to the in-memory set if DATABASE_URL is not configured.
 """
 
 import hashlib
@@ -20,9 +24,9 @@ from agents.fap.models import ActionType, AutonomyLevel
 
 _SECRET = os.getenv("FAP_JWT_SECRET", "dev-only-insecure-secret-change-in-production")
 _ALGORITHM = "HS256"
-_TTL_SECONDS = 86400  # 24 hours — human_review entries need time for sponsor + participant steps
+_TTL_SECONDS = 86400  # 24 hours
 
-# In production this is Redis or a DB table.
+# Fallback when DB is not available
 _consumed_tokens: set[str] = set()
 
 
@@ -41,7 +45,7 @@ def issue_token(
 ) -> tuple[str, str, str]:
     """
     Issue a signed JWT authorization token.
-
+    Writes to PostgreSQL fap_tokens table (best-effort; falls back silently if DB unavailable).
     Returns (token_string, token_id, expires_at_iso).
     """
     token_id = str(uuid.uuid4())
@@ -49,18 +53,34 @@ def issue_token(
     expires_at = now + timedelta(seconds=_TTL_SECONDS)
 
     claims = {
-        "jti": token_id,
-        "iat": int(now.timestamp()),
-        "exp": int(expires_at.timestamp()),
-        "agent_id": agent_id,
+        "jti":            token_id,
+        "iat":            int(now.timestamp()),
+        "exp":            int(expires_at.timestamp()),
+        "agent_id":       agent_id,
         "participant_id": participant_id,
-        "plan_id": plan_id,
-        "action": action.value,
+        "plan_id":        plan_id,
+        "action":         action.value,
         "autonomy_level": autonomy_level.value,
-        "payload_hash": _payload_hash(payload),
+        "payload_hash":   _payload_hash(payload),
     }
 
     token_str = jwt.encode(claims, _SECRET, algorithm=_ALGORITHM)
+
+    # Persist to DB (best-effort — fallback is JWT signature alone)
+    try:
+        from data import db  # noqa: PLC0415
+        db.write_token(
+            token_id=token_id,
+            expires_at=expires_at,
+            agent_id=agent_id,
+            participant_id=participant_id,
+            plan_id=plan_id,
+            action=action.value,
+            payload_hash=claims["payload_hash"],
+        )
+    except Exception:
+        pass
+
     return token_str, token_id, expires_at.isoformat()
 
 
@@ -72,7 +92,8 @@ def validate_token(
 ) -> tuple[bool, str]:
     """
     Validate a FAP token before PAAP executes a write.
-
+    Uses atomic db.consume_token() (PostgreSQL) to prevent double-spend.
+    Falls back to the in-memory set if DB is unavailable.
     Returns (is_valid, reason_if_invalid).
     """
     try:
@@ -83,8 +104,6 @@ def validate_token(
         return False, f"Invalid token: {exc}"
 
     token_id = claims.get("jti", "")
-    if token_id in _consumed_tokens:
-        return False, "Token has already been consumed (single-use)."
 
     if claims.get("action") != expected_action:
         return False, f"Token action mismatch: expected '{expected_action}', got '{claims.get('action')}'."
@@ -96,23 +115,47 @@ def validate_token(
     if claims.get("payload_hash") != actual_hash:
         return False, "Payload hash mismatch — token does not match submitted transaction."
 
-    _consumed_tokens.add(token_id)
-    return True, ""
+    # Atomically consume via DB — returns False if already consumed or expired
+    try:
+        from data import db  # noqa: PLC0415
+        if not db.consume_token(token_id):
+            return False, "Token has already been consumed (single-use) or has expired."
+        return True, ""
+    except Exception:
+        # DB unavailable — fall back to in-memory set
+        if token_id in _consumed_tokens:
+            return False, "Token has already been consumed (single-use)."
+        _consumed_tokens.add(token_id)
+        return True, ""
 
 
 def revoke_token(token_id: str) -> None:
     """Mark a token as consumed so it cannot be used."""
-    _consumed_tokens.add(token_id)
+    try:
+        from data import db  # noqa: PLC0415
+        db.consume_token(token_id)
+    except Exception:
+        _consumed_tokens.add(token_id)
 
 
 def unconsume_token(token_str: str) -> None:
-    """Remove a token from the consumed set — rollback compensation if execution fails
-    after consumption. Allows the participant to retry with the same token."""
+    """Saga rollback compensation — reverse a token consumption if execution fails after
+    the token was consumed. Allows the participant to retry with the same token."""
     try:
         claims = jwt.decode(
             token_str, _SECRET, algorithms=[_ALGORITHM],
-            options={"verify_exp": False},  # decode even if expired, just need the jti
+            options={"verify_exp": False},
         )
-        _consumed_tokens.discard(claims.get("jti", ""))
+        token_id = claims.get("jti", "")
+        if not token_id:
+            return
+        # DB rollback first
+        try:
+            from data import db  # noqa: PLC0415
+            db.unconsume_token_db(token_id)
+        except Exception:
+            pass
+        # Also clear from fallback set
+        _consumed_tokens.discard(token_id)
     except Exception:
         pass

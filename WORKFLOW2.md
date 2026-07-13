@@ -201,20 +201,31 @@ In demo: transaction is recorded, balance in mock data unchanged until Phase 6.
 ## Current Build Status
 
 ```
-✅ Built and demo-ready
-   Layer 2: Intent Agent, Data Agent, Compliance Agent (CrewAI + Claude)
+✅ Built and complete
    Layer 3: PLAP, FAP (12 rules), PAAP — pure Python, 87 tests
+   Layer 2: Intent Agent, Data Agent, Compliance Agent, Participant Agent (CrewAI + Claude)
    Layer 1: CLI — participant + sponsor sessions
             Live streaming display, fast-path commands, role switching
-            Review queue persists to disk (review_queue_state.json)
    Layer 1+: FastAPI REST API — all endpoints built (Phase 4 complete)
              SSE streaming, JWT session auth, document upload, queue, admin, disburse
+   Layer 4: PostgreSQL — ALL writes wired (Phase 6 complete)
+            fap_audit_log, fap_tokens, transactions, review_queue, documents
+            vested_balance decremented after every disbursement
+            Alembic migrations 001 + 002 applied
+   Storage:  MinIO (S3-compatible) — document bytes stored in object storage
+   Verification: LLM document verification checks participant name on document
 
 ⏳ Not yet built
-   Layer 4: PostgreSQL write-back for PAAP mutations (Phase 6) — reads wired, mocks in place
-   Layer 7+: Web portal / mobile app
+   Layer 7+: Web portal / mobile app — THREE portals needed (see below)
    Layer 5: External recordkeeper SFTP (Phase 5+, out of scope)
              → Plan sponsor manages participant data manually until then
+   Redis:    supervised_pending + disbursement_pending + consumed_tokens
+             currently in-memory Python dicts/set — die on server restart
+             swap to Redis before production deployment
+   Notifications: no alert sent to sponsor when a queue entry is submitted
+                  sponsor must poll GET /queue manually
+   Audit export: GET /admin/audit returns JSON only
+                 DOL needs a downloadable CSV — one endpoint to add
 ```
 
 ---
@@ -2330,55 +2341,169 @@ See [CLI_GUIDE.md](CLI_GUIDE.md) for a full reference of every action, the confi
 ```
 Phase 1 · Core Engine          ✅ COMPLETE
 ├── Pydantic v2 models (PLAP, FAP, PAAP)
-├── 12-rule FAP compliance engine — pure Python
+├── 12-rule FAP compliance engine — pure Python, fail-fast
 ├── JWT token issuance + single-use validation
-├── Mock data — 2 plans, 5 participants, 4 agents
-├── 86 pytest tests — every rule, pass + fail
+├── Mock data — 2 plans, 4 participants, 4 agents
+├── 87 pytest tests — every rule, pass + fail
 └── Demo script — 3 loan scenarios
 
 Phase 2 · Data Layer           ✅ COMPLETE
-├── PostgreSQL schema — 11 tables
-├── data/db.py — real DB layer (same interface as mocks)
-└── Alembic migration — alembic upgrade head
+├── PostgreSQL schema — 11 base tables
+├── data/db.py — full DB layer (reads + writes, graceful fallback)
+└── Alembic migration 001 — base schema applied
 
 Phase 3 · CrewAI + LLM         ✅ COMPLETE
-├── 8 CrewAI tools wrapping PLAP/FAP/PAAP
-├── ParticipantCrew, SponsorCrew, AdvisorCrew
+├── 9 CrewAI tools wrapping PLAP/FAP/PAAP + documents
+├── ParticipantCrew (4 agents), SponsorCrew, AdvisorCrew
+│   ParticipantCrew agents:
+│   ├── Intent Agent — natural language parsing, response formatting (no tools)
+│   ├── Data Agent — read-only: GetPlanRules, GetFundLineup, GetParticipantSummary, GetLoanHeadroom
+│   ├── Compliance Agent — RunComplianceCheckTool only (never touches data or execution)
+│   └── Participant Agent — ExecuteTransactionTool only (write-only, post-FAP-token)
 ├── Crew router (crew/router.py)
 ├── Interactive CLI (demo/crew_cli.py)
 ├── Supervised confirm/cancel flow
 ├── Graceful API error handling
-├── All 10 action types demoable (payload key bugs fixed)
+├── All 10 action types demoable
 ├── Live streaming display — step headers + per-tool output + 12-rule trace
-├── Queue persistence to disk (survives restarts)
 ├── Sponsor fast-path (instant reads without LLM: queue / audit / blackout)
 ├── Role switching via 'back' command — no Ctrl+C restart
-├── PART-002 updated to retired + rmd_required (separation + RMD now demoable)
 ├── Document upload system (hardship + QDRO)
-│   ├── data/document_store.py — JSON-backed document records
 │   ├── data/sample_docs/ — 5 pre-filled demo documents
 │   ├── crew/tools/document_tools.py — UploadDocumentTool, GetDocumentsTool, verify_document()
 │   ├── CLI: doc upload prompt after hardship/QDRO queue (sample / file path / skip)
-│   ├── CLI: sponsor 'docs <entry_id>' command to view uploaded documents
+│   ├── CLI: sponsor 'docs <entry_id>' command to view documents
 │   └── CLI: Approve blocked for hardship/QDRO until verified docs on file
-└── LLM-based document verification (Claude Haiku, direct API call, not CrewAI)
+└── LLM document verification (Claude Haiku) — checks type, fields, legitimacy, participant name
 
 Phase 4 · FastAPI Endpoints    ✅ COMPLETE
 ├── POST /auth/login, GET /meta/*
 ├── POST /chat (SSE streaming)
 ├── GET/POST /transactions/pending, confirm, cancel
-├── POST /transactions/disburse (bank details collection)
-├── POST /documents/upload, GET /documents/{id}
+├── POST /transactions/disburse (bank details — never stored)
+├── POST /documents/upload (.txt/.pdf/.docx), GET /documents/{id}
 ├── GET/POST /queue, /queue/{id}/approve-docs, approve, deny
 └── GET /admin/audit, POST /admin/blackout
 
-Phase 5 · External Recordkeeper Integration   ⏳ OUT OF SCOPE (plan sponsor handles now)
-  When needed: SFTP integration with Fidelity/Vanguard/Empower
+Phase 5 · External Recordkeeper   ⏳ OUT OF SCOPE (plan sponsor handles manually now)
+  When needed: SFTP with Fidelity / Vanguard / Empower
   Inbound: nightly balance file → PostgreSQL participants table
   Outbound: instruction file → ACH disbursement to participant's bank
 
-Phase 6 · Production Hardening ⏳ PENDING
+Phase 6 · PostgreSQL Wiring    ✅ COMPLETE
+├── Migration 002 — transactions, review_queue, documents tables (Alembic)
+├── fap_audit_log — every FAP decision written to DB (audit bug fixed)
+├── fap_tokens — issued + atomically consumed via PostgreSQL (saga rollback wired)
+├── transactions — every PAAP execution recorded with action, amount, token_id
+├── review_queue — DB-backed (JSON fallback if DATABASE_URL not set)
+├── documents — DB-backed with MinIO object_key (JSON fallback)
+├── vested_balance — decremented after every disbursement via DB
+├── participant_loans — loan record created on every approved loan_initiation
+├── Document verification — LLM checks participant name against name on document
+└── MinIO — document bytes stored in S3-compatible object storage
+
+Phase 7 · Production Hardening  ⏳ REMAINING
+├── UI — web portal (THREE portals — see UI section below)
+├── Redis — see full explanation below
+├── Notifications — email/webhook when queue entry submitted (see below)
+├── Audit export — GET /admin/audit/export.csv for DOL downloads (see below)
+└── PII encryption at rest (PostgreSQL column-level encryption)
 ```
+
+---
+
+## Phase 7 Remaining Work — Full Explanation
+
+### Redis
+
+**What Redis is**
+Redis is an in-memory key-value store that runs as a separate process alongside the API server.
+Unlike a Python dict (which lives inside the server process), Redis survives server restarts
+and is shared across multiple server instances (if you ever scale to 2+ servers).
+It has native TTL support — you store a key with an expiry and it auto-deletes. No cleanup job needed.
+It is the standard solution for short-lived durable state: session tokens, rate limiting, queues, ephemeral locks.
+
+**What we are currently using without Redis (the problem)**
+Right now, three things live as plain Python in-process variables:
+
+| Variable | File | Type | What it holds |
+|---|---|---|---|
+| `supervised_pending` | `api/routes/transactions.py` | `dict` | Pending supervised transactions (loan initiation, deferral to 0%) — holds the FAP token until participant confirms or cancels via `/transactions/confirm` or `/transactions/cancel` |
+| `disbursement_pending` | `api/routes/transactions.py` | `dict` | Queue entries in `approved_awaiting_bank_details` state — holds the FAP token between sponsor approval and participant bank details submission via `/transactions/disburse` |
+| `consumed_tokens` | `agents/fap/tokens.py` | `set` | Set of JWT token IDs that have already been used — prevents the same FAP token being submitted twice (double-spend protection) |
+
+**Why this is a problem**
+If the API server restarts (crash, redeploy, scaling event):
+- `supervised_pending` is wiped → participant who was mid-confirm loses their pending loan; they'd have to re-chat
+- `disbursement_pending` is wiped → participant whose hardship was sponsor-approved can no longer disburse
+- `consumed_tokens` is wiped → a previously used FAP token could be replayed immediately after restart
+
+**What Redis fixes**
+All three variables become Redis keys with a TTL matching the FAP token expiry (15 minutes):
+```
+supervised_pending[token_id]   → Redis HASH, EX 900
+disbursement_pending[entry_id] → Redis STRING, EX 900
+consumed_tokens[token_id]      → Redis SET member (SADD + TTL)
+```
+After a server restart, the state is still in Redis. Participants mid-flow are unaffected.
+
+**Why Redis and not PostgreSQL for these?**
+These are ephemeral state — they expire in 15 minutes naturally.
+Putting them in PostgreSQL would work but requires periodic cleanup jobs and adds load to the
+transactional DB. Redis handles TTL natively, is much faster for these tiny reads/writes,
+and is the industry standard for this exact pattern (token state, session locks).
+
+**Files to change when implementing:**
+- `api/routes/transactions.py` — replace `supervised_pending` and `disbursement_pending` dicts
+- `agents/fap/tokens.py` — replace `consumed_tokens` set and `_pending_tokens` set
+- Add `redis` to `requirements.txt`, add `REDIS_URL` to `.env.example`
+
+---
+
+### Notifications
+
+**What it is**
+Currently the plan sponsor must actively poll `GET /queue` to see if a new human_review entry arrived.
+There is no push — no email, no webhook, nothing fires when a participant submits a hardship request.
+
+**What to build**
+Hook into `data/review_queue.py → enqueue()`. After writing the entry to DB, fire an async notification:
+- **Email**: send to sponsor's email (plan → sponsor_email field) via SendGrid or SMTP
+  Subject: `[Aldergate] New {action} request from {participant_id} — requires your approval`
+- **Webhook** (optional): POST to a configured `SPONSOR_WEBHOOK_URL` with the queue entry JSON
+
+**Why it matters for ERISA compliance**
+ERISA has time limits on some approvals (QDRO: 18 months to qualify, ERISA § 206(d)).
+If the sponsor doesn't know a request arrived, the clock still runs.
+
+**Files to change:**
+- `data/review_queue.py` — add `_send_notification(entry)` call inside `enqueue()`
+- New file: `api/notifications.py` — email/webhook dispatch logic
+- Add `SPONSOR_EMAIL`, `SMTP_HOST` (or `SENDGRID_API_KEY`), `SPONSOR_WEBHOOK_URL` to `.env.example`
+
+---
+
+### Audit Export
+
+**What it is**
+ERISA § 107 requires the plan to retain FAP audit records for 6 years and produce them on DOL request.
+Currently the audit log is in PostgreSQL (`fap_audit_log` table) and readable via `GET /admin/audit`.
+But DOL auditors ask for a file — not a REST API call.
+
+**What to build**
+`GET /admin/audit/export.csv` — streams the full `fap_audit_log` table as a CSV download.
+Optionally add `?from=2025-01-01&to=2025-12-31` date range filters.
+
+**Files to change:**
+- `api/routes/admin.py` — add one new route using Python `csv.DictWriter` + `StreamingResponse`
+- No schema changes needed — data is already in `fap_audit_log`
+
+---
+
+### UI (the largest remaining item)
+
+See the UI section elsewhere in this document for the three portals breakdown.
+Redis, notifications, and audit export are all independent of the UI and can be built in any order.
 
 ---
 

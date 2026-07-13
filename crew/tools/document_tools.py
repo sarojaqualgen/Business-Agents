@@ -27,10 +27,14 @@ def verify_document(
     expense_type: str,
     action_type: str,
     content_text: str,
+    participant_name: str = "",
 ) -> dict:
     """
-    Call Claude to verify whether the uploaded document matches the claimed
-    action and expense type. Returns {verified, note, key_details}.
+    Call Claude Haiku to verify the uploaded document.
+    Checks: correct type, key fields present, appears legitimate,
+    and — when participant_name is supplied — that the name on the
+    document matches the participant (not someone else's document).
+    Returns {verified, note, key_details, name_match}.
     """
     try:
         import anthropic
@@ -38,6 +42,16 @@ def verify_document(
 
         action_label = action_type.replace("_", " ")
         doc_label = document_store.DOC_TYPE_LABELS.get(doc_type, doc_type)
+
+        name_instruction = (
+            f"4. The document must belong to the participant named '{participant_name}'. "
+            f"If a patient name, account holder name, or recipient name is visible on the document "
+            f"and it does NOT match '{participant_name}', set verified=false and explain the mismatch. "
+            f"A document addressed to someone else is not acceptable — this protects against a participant "
+            f"uploading another person's records.\n"
+            if participant_name
+            else "4. No participant name was supplied — skip the name check.\n"
+        )
 
         prompt = (
             f"You are a document verification agent for an ERISA 401(k) plan administrator.\n\n"
@@ -50,19 +64,22 @@ def verify_document(
             f"Evaluate whether this document:\n"
             f"1. Is the correct document type for the claimed expense\n"
             f"2. Contains the key information expected (amounts, dates, provider/institution)\n"
-            f"3. Appears to be a legitimate document (not obviously fabricated)\n\n"
+            f"3. Appears to be a legitimate document (not obviously fabricated)\n"
+            f"{name_instruction}\n"
             f"Respond in JSON only:\n"
-            f'{{"verified": true/false, "note": "one sentence reason", "key_details": "amount, date, provider extracted from the doc"}}'
+            f'{{"verified": true/false, "note": "one sentence reason", '
+            f'"key_details": "amount, date, provider extracted from the doc", '
+            f'"name_on_document": "name found on the document or empty string if none visible", '
+            f'"name_match": true/false}}'
         )
 
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=256,
+            max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )
 
         raw = message.content[0].text.strip()
-        # Strip markdown code fences if present
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -74,6 +91,8 @@ def verify_document(
             "verified": False,
             "note": f"Verification service unavailable: {str(exc)[:80]}",
             "key_details": "",
+            "name_on_document": "",
+            "name_match": False,
         }
 
 
@@ -126,8 +145,18 @@ class UploadDocumentTool(BaseTool):
         if not content_text.strip():
             return json.dumps({"error": "Document is empty."})
 
+        # Look up participant name so LLM can check document belongs to them
+        participant_name = ""
+        try:
+            from data.participants import get_participant  # noqa: PLC0415
+            p = get_participant(participant_id)
+            if p:
+                participant_name = f"{p.first_name} {p.last_name}"
+        except Exception:
+            pass
+
         # Verify using full content text (LLM sees up to 2000 chars)
-        verification = verify_document(doc_type, expense_type, action_type, content_text)
+        verification = verify_document(doc_type, expense_type, action_type, content_text, participant_name)
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         # Store first 500 chars as preview; full content lives in MinIO if object_key is set
@@ -156,6 +185,8 @@ class UploadDocumentTool(BaseTool):
             "verified": verification.get("verified", False),
             "verification_note": verification.get("note", ""),
             "key_details": verification.get("key_details", ""),
+            "name_on_document": verification.get("name_on_document", ""),
+            "name_match": verification.get("name_match", False),
             "queue_entry_id": queue_entry_id,
             "storage": "minio" if object_key else "local",
         }

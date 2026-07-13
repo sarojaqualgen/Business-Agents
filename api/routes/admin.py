@@ -30,7 +30,7 @@ def audit_log(session: SessionToken = Depends(get_session)):
     records = get_all_audit_records()
     return {
         "count": len(records),
-        "note":  "Audit log is in-memory only until Phase 6 (PostgreSQL).",
+        "note":  "Audit log stored in PostgreSQL fap_audit_log (falls back to in-memory if DB unavailable).",
         "records": [
             {
                 "audit_id":       r.audit_id,

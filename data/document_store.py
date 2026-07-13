@@ -1,8 +1,8 @@
 """
 Document Store — stores supporting documents uploaded by participants for human_review actions.
 
-Currently: JSON-backed flat file (data/document_store.json).
-Phase 6: PostgreSQL table (documents).
+Phase 6: primary persistence is PostgreSQL (via data/db.py).
+Falls back to in-memory list + document_store.json if DATABASE_URL is not set.
 
 Each document is linked to a review_queue entry_id so the plan sponsor
 can see all documents for a request when reviewing the queue.
@@ -83,8 +83,11 @@ class DocumentRecord:
     sponsor_doc_approved_at: str = ""
 
 
+# In-memory fallback
 _store: list[DocumentRecord] = []
 
+
+# ── JSON fallback helpers ────────────────────────────────────────────────────
 
 def _save() -> None:
     data = [
@@ -121,7 +124,6 @@ def _load() -> None:
     try:
         data = json.loads(_STORE_FILE.read_text())
         for d in data:
-            # content_preview falls back to content_text for backward compat with old store files
             preview = d.get("content_preview", d.get("content_text", ""))[:500]
             _store.append(DocumentRecord(
                 doc_id=d["doc_id"],
@@ -146,8 +148,32 @@ def _load() -> None:
         pass
 
 
+def _row_to_record(r: dict) -> DocumentRecord:
+    return DocumentRecord(
+        doc_id=str(r["doc_id"]),
+        participant_id=r.get("participant_id", ""),
+        plan_id=r.get("plan_id", ""),
+        queue_entry_id=r.get("queue_entry_id", ""),
+        action_type=r.get("action_type", ""),
+        expense_type=r.get("expense_type", ""),
+        doc_type=r.get("doc_type", ""),
+        filename=r.get("filename", ""),
+        content_preview=r.get("content_preview", "")[:500],
+        object_key=r.get("object_key", ""),
+        uploaded_at=str(r.get("uploaded_at", "")),
+        verified=bool(r.get("verified", False)),
+        verification_note=r.get("verification_note", ""),
+        verified_at=str(r.get("verified_at", "")) if r.get("verified_at") else "",
+        sponsor_doc_approved=bool(r.get("sponsor_doc_approved", False)),
+        sponsor_doc_note=r.get("sponsor_doc_note", ""),
+        sponsor_doc_approved_at=str(r.get("sponsor_doc_approved_at", "")) if r.get("sponsor_doc_approved_at") else "",
+    )
+
+
 _load()
 
+
+# ── Public API ───────────────────────────────────────────────────────────────
 
 def upload(
     participant_id: str,
@@ -162,6 +188,27 @@ def upload(
     object_key: str = "",
 ) -> str:
     doc_id = str(uuid.uuid4())[:8].upper()
+    preview = content_preview[:500]
+
+    try:
+        from data import db  # noqa: PLC0415
+        db.write_document_record(
+            doc_id=doc_id,
+            participant_id=participant_id,
+            plan_id=plan_id,
+            queue_entry_id=queue_entry_id,
+            action_type=action_type,
+            expense_type=expense_type,
+            doc_type=doc_type,
+            filename=filename,
+            content_preview=preview,
+            object_key=object_key,
+            uploaded_at=uploaded_at,
+        )
+        return doc_id
+    except Exception:
+        pass
+
     _store.append(DocumentRecord(
         doc_id=doc_id,
         participant_id=participant_id,
@@ -171,7 +218,7 @@ def upload(
         expense_type=expense_type,
         doc_type=doc_type,
         filename=filename,
-        content_preview=content_preview[:500],
+        content_preview=preview,
         object_key=object_key,
         uploaded_at=uploaded_at,
     ))
@@ -180,14 +227,33 @@ def upload(
 
 
 def get_by_entry(queue_entry_id: str) -> list[DocumentRecord]:
+    try:
+        from data import db  # noqa: PLC0415
+        rows = db.get_documents_by_entry(queue_entry_id)
+        return [_row_to_record(r) for r in rows]
+    except Exception:
+        pass
     return [d for d in _store if d.queue_entry_id == queue_entry_id]
 
 
 def get_by_participant(participant_id: str) -> list[DocumentRecord]:
+    try:
+        from data import db  # noqa: PLC0415
+        rows = db.get_documents_by_participant(participant_id)
+        return [_row_to_record(r) for r in rows]
+    except Exception:
+        pass
     return [d for d in _store if d.participant_id == participant_id]
 
 
 def mark_verified(doc_id: str, verified: bool, note: str, verified_at: str) -> Optional[DocumentRecord]:
+    # Best-effort DB update; update in-memory cache too if present
+    try:
+        from data import db  # noqa: PLC0415
+        db.mark_document_verified_db(doc_id=doc_id, verified=verified, note=note, verified_at=verified_at)
+    except Exception:
+        pass
+
     doc = next((d for d in _store if d.doc_id == doc_id), None)
     if doc:
         doc.verified = verified
@@ -203,6 +269,15 @@ def approve_by_sponsor(
     approved_at: str = "",
 ) -> list[DocumentRecord]:
     """Mark all documents for this queue entry as sponsor-approved."""
+    try:
+        from data import db  # noqa: PLC0415
+        db.approve_document_by_sponsor_db(entry_id=entry_id, note=note, approved_at=approved_at)
+        # Return updated records from DB
+        rows = db.get_documents_by_entry(entry_id)
+        return [_row_to_record(r) for r in rows]
+    except Exception:
+        pass
+
     updated = []
     for d in _store:
         if d.queue_entry_id == entry_id:

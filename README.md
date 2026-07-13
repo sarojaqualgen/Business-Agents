@@ -16,15 +16,15 @@ Every write goes through FAP. FAP runs 12 ERISA rules in pure Python. If all 12 
 ```
 Participant types in English
         ↓
-   [IntentAgent]      — LLM: parses natural language
+   [IntentAgent]        — LLM: parses natural language
         ↓
-   [DataAgent]        — LLM: fetches plan rules (PLAP) + participant data (PAAP)
+   [DataAgent]          — LLM: fetches plan rules (PLAP) + participant data (PAAP, read-only)
         ↓
-   [ComplianceAgent]  — LLM calls FAP: 12 ERISA rules run in pure Python
+   [ComplianceAgent]    — LLM calls FAP: 12 ERISA rules run in pure Python
         ↓
-   [DataAgent]        — LLM: executes transaction or queues for sponsor
+   [ParticipantAgent]   — LLM: executes transaction or queues for sponsor (write-only)
         ↓
-   [IntentAgent]      — LLM: writes plain-English response
+   [IntentAgent]        — LLM: writes plain-English response
 ```
 
 **PLAP, FAP, and PAAP are not LLM agents.** They are deterministic Python. The name "agent" comes from ERISA law — "plan agent" and "fiduciary agent" are legal roles in federal retirement code.
@@ -116,6 +116,69 @@ ANTHROPIC_API_KEY=sk-ant-...     # your Anthropic API key
 FAP_JWT_SECRET=change-me-in-prod # any long random string for dev
 ```
 
+### Document Storage — MinIO (optional)
+
+MinIO is a self-hosted S3-compatible object store. Aldergate uploads participant documents (hardship bills, QDRO court orders) to MinIO so the actual file bytes live in object storage — the JSON store keeps only a 500-character preview and the object key.
+
+**MinIO is optional.** If it is not running, uploads still work — the system falls back to text-only mode automatically. No code change needed.
+
+#### Start MinIO with Docker
+
+```bash
+docker run -d \
+  --name aldergate-minio \
+  -p 9000:9000 \
+  -p 9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin \
+  -e MINIO_ROOT_PASSWORD=minioadmin \
+  minio/minio server /data --console-address ":9001"
+```
+
+| Port | What it is |
+|---|---|
+| `9000` | MinIO S3 API — what the app talks to |
+| `9001` | MinIO Console (browser UI) |
+
+#### Open the console
+
+Go to **http://localhost:9001** in your browser.
+
+- Username: `minioadmin`
+- Password: `minioadmin`
+
+The bucket `aldergate-docs` is created automatically on first upload. You can browse uploaded documents under **Buckets → aldergate-docs**.
+
+#### Stop / restart / remove
+
+```bash
+# Stop (container still exists — Docker Desktop will still show it)
+docker stop aldergate-minio
+
+# Start again after stopping (faster than docker run, reuses the same container)
+docker start aldergate-minio
+
+# Fully remove the container
+docker rm aldergate-minio
+```
+
+> Docker Desktop will show the container as "in use" even when stopped — that is normal. It disappears only after `docker rm`.
+
+#### Environment variables
+
+These are already set to the Docker defaults in `.env.example` — no changes needed for local dev:
+
+```
+MINIO_ENDPOINT=localhost:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
+MINIO_BUCKET=aldergate-docs
+MINIO_SECURE=false
+```
+
+Change `MINIO_SECURE=true` and update credentials when deploying to production.
+
+---
+
 ### Run the CLI
 
 ```bash
@@ -145,7 +208,8 @@ pytest tests/ -v
 | 3 — CrewAI + LLM | Done | CrewAI crews, Claude claude-sonnet-4-6, interactive CLI |
 | 4 — FastAPI API | Done | REST endpoints with SSE streaming, auth, document upload, queue and admin endpoints |
 | 5 — Recordkeeper | Pending | SFTP/API nightly sync from Fidelity/Vanguard/Empower |
-| 6 — Production | Pending | Redis tokens, PII encryption, DOL compliance audit |
+| 6 — PostgreSQL Wiring | Done | Transactions table, review queue, documents, FAP tokens, audit log — all DB-backed with JSON fallback |
+| 7 — Production | Pending | Redis ephemeral state, PII encryption, DOL compliance audit |
 
 ---
 
@@ -157,10 +221,14 @@ pytest tests/ -v
 | `agents/fap/tokens.py` | JWT issuance and single-use validation |
 | `agents/plap/models.py` | Plan configuration data models |
 | `agents/paap/models.py` | Participant account data models |
-| `crew/crews/participant_crew.py` | ParticipantCrew — 3 agents, 6 tasks |
+| `crew/crews/participant_crew.py` | ParticipantCrew — 4 agents, 6 tasks |
 | `crew/crews/sponsor_crew.py` | SponsorCrew — 3 agents, 4 tasks |
 | `crew/router.py` | Routes to the correct crew by principal_type |
 | `demo/crew_cli.py` | Interactive multi-agent CLI |
+| `data/minio_client.py` | MinIO client — document upload, presigned URL generation |
+| `data/document_store.py` | Document metadata store (PostgreSQL-backed, JSON fallback) |
+| `data/review_queue.py` | Human review queue (PostgreSQL-backed, JSON fallback) |
+| `alembic/versions/` | DB migration scripts — run `alembic upgrade head` after clone |
 | `data/plans.py` | Plan data layer — reads from PostgreSQL |
 | `data/participants.py` | Participant data layer — reads from PostgreSQL |
 | `tests/test_fap_compliance.py` | 87 tests — every rule, pass + fail |

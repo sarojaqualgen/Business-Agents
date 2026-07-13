@@ -6,7 +6,7 @@ Agents:
                          formats the final participant-facing response
   - Data Agent         : fetches plan rules + participant summary (read-only PLAP/PAAP tools)
   - Compliance Agent   : runs all 12 ERISA rules via FAP and issues/denies a token
-  - Transaction Agent  : executes the approved transaction via ExecuteTransaction (write-only PAAP)
+  - Participant Agent   : executes the approved transaction via ExecuteTransaction (write-only PAAP)
 
 Separating Data Agent (reads) from Transaction Agent (writes) enforces the ERISA principle
 that data retrieval and execution are distinct fiduciary acts.
@@ -113,8 +113,8 @@ def build_participant_crew(
         allow_delegation=False,
     )
 
-    transaction_agent = Agent(
-        role="ERISA Transaction Executor",
+    participant_agent = Agent(
+        role="Participant Agent",
         goal=(
             "Execute PAAP-level participant transactions once FAP has issued a valid authorization token. "
             "Route human_review actions to the plan sponsor queue."
@@ -282,7 +282,7 @@ def build_participant_crew(
             "Transaction execution result: status (executed/queued_for_human_review/not_applicable), "
             "queue_entry_id if applicable, or denial pass-through."
         ),
-        agent=transaction_agent,
+        agent=participant_agent,
         context=[task_interpret, task_compliance],
     )
 
@@ -315,7 +315,7 @@ def build_participant_crew(
     # -------------------------------------------------------------------------
 
     return Crew(
-        agents=[intent_agent, data_agent, compliance_agent, transaction_agent],
+        agents=[intent_agent, data_agent, compliance_agent, participant_agent],
         tasks=[
             task_interpret,
             task_fetch_plan,
