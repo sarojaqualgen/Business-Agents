@@ -81,7 +81,20 @@ async def upload_document(
     if not text.strip():
         raise HTTPException(400, "Could not extract any text from the document")
 
-    # Pass text directly via TEXT: prefix — no temp file needed
+    # Try to upload raw bytes to MinIO — gracefully falls back if MinIO is not configured
+    object_key = ""
+    try:
+        from data import minio_client  # noqa: PLC0415
+        object_key = minio_client.upload_document(
+            participant_id=session.participant_id or "unknown",
+            filename=file.filename or f"{doc_type}.bin",
+            content=content,
+            content_type=file.content_type or "application/octet-stream",
+        )
+    except Exception:
+        pass  # MinIO not configured — store will use text-only mode
+
+    # Pass extracted text via TEXT: prefix for LLM verification; object_key for MinIO reference
     crew = build_document_verification_crew(
         participant_id=session.participant_id or "",
         plan_id=session.plan_id or "",
@@ -90,6 +103,7 @@ async def upload_document(
         expense_type=expense_type,
         doc_type=doc_type,
         file_path=f"TEXT:{text}",
+        object_key=object_key,
     )
 
     return StreamingResponse(

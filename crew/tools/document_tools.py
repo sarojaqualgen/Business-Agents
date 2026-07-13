@@ -89,6 +89,7 @@ class UploadDocumentInput(BaseModel):
     expense_type: str = Field(description="Expense category: medical, tuition, prevent_eviction, funeral, etc. Use 'qdro' for QDRO court orders.")
     doc_type: str = Field(description="Document type: medical_bill, eviction_notice, tuition_invoice, funeral_invoice, court_order, etc.")
     file_path: str = Field(description="Absolute path to the document file, or pass the text content directly prefixed with 'TEXT:'")
+    object_key: str = Field(default="", description="MinIO object key if the file was already uploaded to object storage by the API layer — leave empty for CLI/local uploads")
 
 
 class UploadDocumentTool(BaseTool):
@@ -109,6 +110,7 @@ class UploadDocumentTool(BaseTool):
         expense_type: str,
         doc_type: str,
         file_path: str,
+        object_key: str = "",
     ) -> str:
         # Read content
         if file_path.startswith("TEXT:"):
@@ -124,10 +126,11 @@ class UploadDocumentTool(BaseTool):
         if not content_text.strip():
             return json.dumps({"error": "Document is empty."})
 
-        # Verify
+        # Verify using full content text (LLM sees up to 2000 chars)
         verification = verify_document(doc_type, expense_type, action_type, content_text)
 
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Store first 500 chars as preview; full content lives in MinIO if object_key is set
         doc_id = document_store.upload(
             participant_id=participant_id,
             plan_id=plan_id,
@@ -136,7 +139,8 @@ class UploadDocumentTool(BaseTool):
             expense_type=expense_type,
             doc_type=doc_type,
             filename=filename,
-            content_text=content_text,
+            content_preview=content_text[:500],
+            object_key=object_key,
             uploaded_at=now,
         )
         document_store.mark_verified(
@@ -146,14 +150,16 @@ class UploadDocumentTool(BaseTool):
             verified_at=now,
         )
 
-        return json.dumps({
+        result = {
             "doc_id": doc_id,
             "filename": filename,
             "verified": verification.get("verified", False),
             "verification_note": verification.get("note", ""),
             "key_details": verification.get("key_details", ""),
             "queue_entry_id": queue_entry_id,
-        })
+            "storage": "minio" if object_key else "local",
+        }
+        return json.dumps(result)
 
 
 # ---------------------------------------------------------------------------
@@ -185,20 +191,29 @@ class GetDocumentsTool(BaseTool):
                 "note": "No documents uploaded for this entry yet.",
             })
 
+        doc_list = []
+        for d in docs:
+            entry = {
+                "doc_id": d.doc_id,
+                "doc_type": d.doc_type,
+                "doc_type_label": document_store.DOC_TYPE_LABELS.get(d.doc_type, d.doc_type),
+                "filename": d.filename,
+                "uploaded_at": d.uploaded_at,
+                "verified": d.verified,
+                "verification_note": d.verification_note,
+                "content_preview": d.content_preview,
+                "storage": "minio" if d.object_key else "local",
+            }
+            if d.object_key:
+                try:
+                    from data import minio_client  # noqa: PLC0415
+                    entry["download_url"] = minio_client.get_presigned_url(d.object_key)
+                except Exception:
+                    entry["download_url"] = None
+            doc_list.append(entry)
+
         return json.dumps({
             "queue_entry_id": queue_entry_id,
             "document_count": len(docs),
-            "documents": [
-                {
-                    "doc_id": d.doc_id,
-                    "doc_type": d.doc_type,
-                    "doc_type_label": document_store.DOC_TYPE_LABELS.get(d.doc_type, d.doc_type),
-                    "filename": d.filename,
-                    "uploaded_at": d.uploaded_at,
-                    "verified": d.verified,
-                    "verification_note": d.verification_note,
-                    "content_preview": d.content_text[:300],
-                }
-                for d in docs
-            ],
+            "documents": doc_list,
         })

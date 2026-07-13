@@ -37,6 +37,17 @@ router = APIRouter()
 _DOC_REQUIRED = {"hardship_distribution", "qdro"}
 
 
+def _minio_url(object_key: str) -> str | None:
+    """Return a fresh presigned MinIO URL for the object key, or None if not applicable."""
+    if not object_key:
+        return None
+    try:
+        from data import minio_client  # noqa: PLC0415
+        return minio_client.get_presigned_url(object_key)
+    except Exception:
+        return None
+
+
 def _sponsor_only(session: SessionToken) -> None:
     if session.principal_type not in ("plan_sponsor", "plan_trustee"):
         raise HTTPException(403, "Only plan sponsors can access the review queue")
@@ -101,7 +112,8 @@ def get_entry_documents(entry_id: str, session: SessionToken = Depends(get_sessi
                 "verification_note":    d.verification_note,
                 "sponsor_doc_approved": d.sponsor_doc_approved,
                 "sponsor_doc_note":     d.sponsor_doc_note,
-                "content_preview":      d.content_text[:400],
+                "content_preview":      d.content_preview,
+                "download_url":         _minio_url(d.object_key),
             }
             for d in docs
         ],

@@ -72,8 +72,9 @@ class DocumentRecord:
     expense_type: str        # "medical", "qdro", etc.
     doc_type: str            # "medical_bill", "eviction_notice", etc.
     filename: str
-    content_text: str        # full text content
+    content_preview: str     # first 500 chars for sponsor quick-view
     uploaded_at: str
+    object_key: str = ""             # MinIO object key — empty if MinIO not configured
     verified: bool = False           # LLM auto-verification result
     verification_note: str = ""
     verified_at: str = ""
@@ -96,7 +97,8 @@ def _save() -> None:
             "expense_type": d.expense_type,
             "doc_type": d.doc_type,
             "filename": d.filename,
-            "content_text": d.content_text,
+            "content_preview": d.content_preview,
+            "object_key": d.object_key,
             "uploaded_at": d.uploaded_at,
             "verified": d.verified,
             "verification_note": d.verification_note,
@@ -119,6 +121,8 @@ def _load() -> None:
     try:
         data = json.loads(_STORE_FILE.read_text())
         for d in data:
+            # content_preview falls back to content_text for backward compat with old store files
+            preview = d.get("content_preview", d.get("content_text", ""))[:500]
             _store.append(DocumentRecord(
                 doc_id=d["doc_id"],
                 participant_id=d["participant_id"],
@@ -128,7 +132,8 @@ def _load() -> None:
                 expense_type=d["expense_type"],
                 doc_type=d["doc_type"],
                 filename=d["filename"],
-                content_text=d["content_text"],
+                content_preview=preview,
+                object_key=d.get("object_key", ""),
                 uploaded_at=d["uploaded_at"],
                 verified=d.get("verified", False),
                 verification_note=d.get("verification_note", ""),
@@ -152,8 +157,9 @@ def upload(
     expense_type: str,
     doc_type: str,
     filename: str,
-    content_text: str,
+    content_preview: str,
     uploaded_at: str,
+    object_key: str = "",
 ) -> str:
     doc_id = str(uuid.uuid4())[:8].upper()
     _store.append(DocumentRecord(
@@ -165,7 +171,8 @@ def upload(
         expense_type=expense_type,
         doc_type=doc_type,
         filename=filename,
-        content_text=content_text,
+        content_preview=content_preview[:500],
+        object_key=object_key,
         uploaded_at=uploaded_at,
     ))
     _save()

@@ -1968,7 +1968,7 @@ Does this action move money out of the account?
                         │        ▼
                         │  ┌───────────────────────────────────┐
                         │  │  PAAP EXECUTES                    │
-                        │  │  transaction recorded (~40 sec)    │
+                        │  │  transaction recorded     │
                         │  │  vested_balance decrement: Phase 6│
                         │  └───────────────────────────────────┘
                         │
@@ -2010,7 +2010,7 @@ Does this action move money out of the account?
                                  ▼
                            ┌───────────────────────────────────┐
                            │  PAAP EXECUTES                    │
-                           │  transaction recorded (~40 sec)    │
+                           │  transaction recorded     │
                            │  vested_balance decrement: Phase 6│
                            └───────────────────────────────────┘
 ─────────────────────────────────────────────────────────────────

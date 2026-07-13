@@ -2,10 +2,14 @@
 Participant Crew — handles all self-service actions for a plan participant.
 
 Agents:
-  - Intent Agent     : parses the participant's natural-language query into a structured intent
-  - Data Agent       : fetches plan rules + participant summary via PLAP/PAAP tools
-  - Compliance Agent : runs all 12 ERISA rules via FAP and issues/denies a token
-  - (Data Agent reused) executes the approved transaction or queues it
+  - Intent Agent       : parses the participant's natural-language query into a structured intent;
+                         formats the final participant-facing response
+  - Data Agent         : fetches plan rules + participant summary (read-only PLAP/PAAP tools)
+  - Compliance Agent   : runs all 12 ERISA rules via FAP and issues/denies a token
+  - Transaction Agent  : executes the approved transaction via ExecuteTransaction (write-only PAAP)
+
+Separating Data Agent (reads) from Transaction Agent (writes) enforces the ERISA principle
+that data retrieval and execution are distinct fiduciary acts.
 
 Entry point: build_participant_crew(context) → Crew
 """
@@ -89,21 +93,40 @@ def build_participant_crew(
         role="Retirement Account Data Specialist",
         goal=(
             "Fetch the plan rules and participant data needed to evaluate the requested action. "
-            "Then execute approved transactions or route human_review items to the sponsor queue."
+            "Return exactly what the compliance check needs — nothing more."
         ),
         backstory=(
             "You have read-only access to the Plan Rules Module (PLAP) and the "
-            "Participant Data Module (PAAP). You retrieve exactly the data needed for compliance checks — "
-            "nothing more. You never expose SSNs, dates of birth, marital status, or full account balances "
-            "in your output. After a FAP compliance decision, you execute or queue the transaction."
+            "Participant Data Module (PAAP). You retrieve plan configuration and participant account "
+            "summaries for the compliance check. You never expose SSNs, dates of birth, marital status, "
+            "or full account balances in your output. You do NOT execute transactions — that is the "
+            "Transaction Agent's sole responsibility."
         ),
         tools=[
             GetPlanRulesTool(),
             GetFundLineupTool(),
             GetParticipantSummaryTool(),
             GetLoanHeadroomTool(),
-            ExecuteTransactionTool(),
         ],
+        llm=fap_llm,
+        verbose=False,
+        allow_delegation=False,
+    )
+
+    transaction_agent = Agent(
+        role="ERISA Transaction Executor",
+        goal=(
+            "Execute PAAP-level participant transactions once FAP has issued a valid authorization token. "
+            "Route human_review actions to the plan sponsor queue."
+        ),
+        backstory=(
+            "You are the execution arm of the participant workflow. You receive a valid FAP token from "
+            "the compliance step and call ExecuteTransaction with the correct action and payload. "
+            "You have no read tools — you cannot fetch plan rules or participant data. "
+            "Your only job is to execute or queue what FAP has already authorized. "
+            "If FAP denied the request, you do nothing and pass the denial through."
+        ),
+        tools=[ExecuteTransactionTool()],
         llm=fap_llm,
         verbose=False,
         allow_delegation=False,
@@ -259,7 +282,7 @@ def build_participant_crew(
             "Transaction execution result: status (executed/queued_for_human_review/not_applicable), "
             "queue_entry_id if applicable, or denial pass-through."
         ),
-        agent=data_agent,
+        agent=transaction_agent,
         context=[task_interpret, task_compliance],
     )
 
@@ -292,7 +315,7 @@ def build_participant_crew(
     # -------------------------------------------------------------------------
 
     return Crew(
-        agents=[intent_agent, data_agent, compliance_agent],
+        agents=[intent_agent, data_agent, compliance_agent, transaction_agent],
         tasks=[
             task_interpret,
             task_fetch_plan,
@@ -314,6 +337,7 @@ def build_document_verification_crew(
     expense_type: str,
     doc_type: str,
     file_path: str,
+    object_key: str = "",
 ) -> Crew:
     """
     Mini-crew for document upload and verification after a human_review action is queued.
@@ -352,7 +376,8 @@ def build_document_verification_crew(
             f"  action_type: {action_type}\n"
             f"  expense_type: {expense_type}\n"
             f"  doc_type: {doc_type}\n"
-            f"  file_path: {file_path}\n\n"
+            f"  file_path: {file_path}\n"
+            f"  object_key: {object_key}\n\n"
             "After the tool returns, write a concise participant-facing summary:\n"
             "- State whether the document was verified (Passed / Needs review)\n"
             "- Include the document ID\n"
