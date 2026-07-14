@@ -663,6 +663,71 @@ def record_transaction(
     return transaction_id
 
 
+def get_participant_transactions(participant_id: str) -> list[dict]:
+    """Return executed transactions for a participant, newest first."""
+    try:
+        with _conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT transaction_id, action, amount, autonomy_level,
+                       queue_entry_id, created_at
+                FROM transactions
+                WHERE participant_id = %s
+                ORDER BY created_at DESC
+                LIMIT 100
+                """,
+                (participant_id,),
+            )
+            return [
+                {
+                    "id":             r["transaction_id"],
+                    "type":           "executed",
+                    "action":         r["action"],
+                    "amount":         float(r["amount"]) if r["amount"] is not None else None,
+                    "autonomy_level": r["autonomy_level"],
+                    "queue_entry_id": r["queue_entry_id"],
+                    "timestamp":      r["created_at"].isoformat() if r["created_at"] else None,
+                }
+                for r in cur.fetchall()
+            ]
+    except Exception:
+        return []
+
+
+def get_participant_loans(participant_id: str) -> list[dict]:
+    """Return all loans for a participant (active + paid-off), newest first."""
+    try:
+        with _conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT loan_id, original_amount, outstanding_balance,
+                       origination_date, maturity_date, status
+                FROM participant_loans
+                WHERE participant_id = %s
+                ORDER BY origination_date DESC
+                LIMIT 50
+                """,
+                (participant_id,),
+            )
+            return [
+                {
+                    "id":          r["loan_id"],
+                    "type":        "loan",
+                    "action":      "loan_initiation",
+                    "amount":      float(r["original_amount"]) if r["original_amount"] is not None else None,
+                    "outstanding": float(r["outstanding_balance"]) if r["outstanding_balance"] is not None else None,
+                    "status":      r["status"],
+                    "timestamp":   r["origination_date"].isoformat() if r["origination_date"] else None,
+                    "note":        f"Outstanding: ${float(r['outstanding_balance']):,.2f}" if r["outstanding_balance"] else None,
+                }
+                for r in cur.fetchall()
+            ]
+    except Exception:
+        return []
+
+
 def decrement_vested_balance(participant_id: str, amount: Decimal) -> None:
     """Reduce vested_balance after a disbursement. Clamped to 0."""
     with _conn() as conn:

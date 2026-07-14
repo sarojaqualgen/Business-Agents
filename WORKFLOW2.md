@@ -225,6 +225,19 @@ vested_balance decrement ($80k → $75k) written to PostgreSQL immediately on ex
                   sponsor must poll GET /queue manually
    Audit export: GET /admin/audit returns JSON only
                  DOL needs a downloadable CSV — one endpoint to add
+   Token re-issue UX (edge case — backend exists, no UI yet):
+     If participant waits >24h after sponsor approves a human_review disbursement
+     (hardship, in-service), the fresh token in the queue entry expires.
+     Next POST /transactions/disburse → 400 "Token has expired."
+     Backend: POST /queue/{entry_id}/approve on already-approved entry calls
+       reissue_bank_token() — no re-review, just issues a fresh 24h token.
+       This code path exists and works.
+     Missing: UI for both sides —
+       Sponsor: "Re-issue Token" button on approved_awaiting_bank_details rows
+       Participant: detect 400 "Token has expired" in Activity bank form and show
+         "Your approval window expired — contact your plan sponsor to reauthorize"
+         instead of a raw error.
+     Priority: low for demo, required before real money moves.
 ```
 
 ---

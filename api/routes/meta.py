@@ -7,26 +7,44 @@ GET /meta/plans         — list all plans
 GET /meta/actions       — list all valid action types with descriptions
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from data.participants import ALL_PARTICIPANTS
 from data.plans import ALL_PLANS
+from api.auth import SessionToken, get_session
 
 router = APIRouter()
 
 
 @router.get("/participants")
 def list_participants():
+    # Fetch display names from DB (best-effort — falls back to participant_id
+    # when the database is unavailable so the login page still renders).
+    name_map: dict[str, str] = {}
+    try:
+        from data.db import get_conn
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT participant_id, first_name, last_name FROM participants")
+            for row in cur.fetchall():
+                name_map[row["participant_id"]] = f"{row['first_name']} {row['last_name']}"
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
     result = []
     for pid, p in ALL_PARTICIPANTS.items():
         result.append({
-            "participant_id":   p.participant_id,
-            "plan_id":          p.plan_id,
+            "participant_id":    p.participant_id,
+            "plan_id":           p.plan_id,
+            "display_name":      name_map.get(p.participant_id, p.participant_id),
             "employment_status": p.employment_status.value,
-            "years_of_service": p.years_of_vesting_service,
-            "vesting_pct":      p.vesting_percentage,
-            "loan_headroom":    float(p.max_additional_loan_amount),
+            "years_of_service":  p.years_of_vesting_service,
+            "vesting_pct":       p.vesting_percentage,
+            "loan_headroom":     float(p.max_additional_loan_amount),
             "outstanding_loans": len(p.outstanding_loans),
-            "is_hce":           p.is_hce,
+            "is_hce":            p.is_hce,
             "catch_up_eligible": p.age_50_or_older,
         })
     return {"count": len(result), "participants": result}
@@ -45,6 +63,118 @@ def list_plans():
             "hardship_permitted": plan.hardship_policy.hardship_permitted,
         })
     return {"count": len(result), "plans": result}
+
+
+@router.get("/participant/activity")
+def participant_activity(session: SessionToken = Depends(get_session)):
+    """
+    Unified activity history for the logged-in participant.
+    Returns executed transactions (from DB), FAP denials, and review queue entries,
+    all merged into a single list sorted newest-first.
+    """
+    participant_id = session.participant_id
+    if not participant_id:
+        return {"participant_id": None, "activities": []}
+
+    activities: list[dict] = []
+
+    # 1. Executed transactions from DB
+    executed_tx_ids: set[str] = set()
+    try:
+        from data import db
+        for tx in db.get_participant_transactions(participant_id):
+            executed_tx_ids.add(tx["id"])
+            activities.append({
+                "id":        tx["id"],
+                "type":      "executed",
+                "action":    tx["action"],
+                "amount":    tx["amount"],
+                "timestamp": tx["timestamp"],
+                "label":     None,
+                "note":      None,
+            })
+    except Exception:
+        pass
+
+    # 1b. Loan records from participant_loans (catches pre-seeded / recordkeeper loans
+    #     that were never routed through the transactions table).
+    try:
+        from data import db as _db
+        txn_loan_dates = {
+            a["timestamp"][:10] for a in activities
+            if a["action"] == "loan_initiation" and a["timestamp"]
+        }
+        for loan in _db.get_participant_loans(participant_id):
+            loan_date = (loan["timestamp"] or "")[:10]
+            # Skip if a transaction already covers this date (system-originated loan)
+            if loan_date and loan_date in txn_loan_dates:
+                continue
+            activities.append({
+                "id":        loan["id"],
+                "type":      "loan",
+                "action":    "loan_initiation",
+                "amount":    loan["amount"],
+                "timestamp": loan["timestamp"],
+                "label":     "Active Loan" if loan["status"] == "active" else loan["status"].title(),
+                "note":      loan["note"],
+                "outstanding": loan["outstanding"],
+                "loan_status": loan["status"],
+            })
+    except Exception:
+        pass
+
+    # 2. FAP denials from in-memory audit log
+    try:
+        from agents.fap.agent import get_all_audit_records
+        for r in get_all_audit_records():
+            if r.participant_id != participant_id or r.authorized:
+                continue
+            activities.append({
+                "id":        r.audit_id,
+                "type":      "denied",
+                "action":    r.action,
+                "amount":    None,
+                "timestamp": r.timestamp,
+                "label":     None,
+                "note":      getattr(r, "denial_reason", None),
+                "denial_code": getattr(r, "denial_code", None),
+            })
+    except Exception:
+        pass
+
+    # 3. Review queue entries for this participant
+    try:
+        from data.review_queue import get_all as rq_get_all
+        for e in rq_get_all():
+            if e.participant_id != participant_id:
+                continue
+            status = e.status
+            if status == "pending":
+                act_type = "pending_review"
+            elif status == "approved_awaiting_bank_details":
+                act_type = "awaiting_bank"
+            else:
+                act_type = status  # approved, denied
+            activities.append({
+                "id":        e.entry_id,
+                "type":      act_type,
+                "action":    e.action,
+                "amount":    e.payload.get("amount") if e.payload else None,
+                "timestamp": e.created_at if hasattr(e, "created_at") else None,
+                "label":     None,
+                "note":      f"Status: {status}",
+                "entry_id":  e.entry_id,
+            })
+    except Exception:
+        pass
+
+    # Sort newest-first (None timestamps go last)
+    activities.sort(
+        key=lambda a: a["timestamp"] or "0000",
+        reverse=True,
+    )
+
+    return {"participant_id": participant_id, "activities": activities}
 
 
 @router.get("/actions")

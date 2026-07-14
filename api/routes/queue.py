@@ -62,7 +62,7 @@ def list_queue(session: SessionToken = Depends(get_session)):
     _sponsor_only(session)
     rq_reload()
     ds.reload()
-    entries = get_pending()
+    entries = get_all()          # return all statuses — UI filters client-side
     return {
         "count": len(entries),
         "entries": [
@@ -71,9 +71,12 @@ def list_queue(session: SessionToken = Depends(get_session)):
                 "participant_id":        e.participant_id,
                 "plan_id":               e.plan_id,
                 "action":                e.action,
+                "amount":                (e.payload or {}).get("amount"),
                 "payload":               e.payload,
                 "status":                e.status,
-                "created_at":            e.created_at,
+                "submitted_at":          e.created_at,
+                "resolved_at":           e.resolved_at,
+                "resolution_note":       getattr(e, "sponsor_note", None) or None,
                 "doc_count":             len(ds.get_by_entry(e.entry_id)),
                 "docs_llm_verified":     sum(1 for d in ds.get_by_entry(e.entry_id) if d.verified),
                 "docs_sponsor_approved": sum(1 for d in ds.get_by_entry(e.entry_id) if d.sponsor_doc_approved),

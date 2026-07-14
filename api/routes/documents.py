@@ -20,6 +20,44 @@ router = APIRouter()
 _ALLOWED = {".txt", ".pdf", ".docx", ".doc"}
 
 
+def _minio_url(object_key: str):
+    if not object_key:
+        return None
+    try:
+        from data import minio_client  # noqa: PLC0415
+        return minio_client.get_presigned_url(object_key)
+    except Exception:
+        return None
+
+
+@router.get("/participant")
+def get_participant_documents(session: SessionToken = Depends(get_session)):
+    """Return all documents uploaded by the logged-in participant, with MinIO download URLs."""
+    from data import document_store as ds
+    ds.reload()
+    docs = ds.get_by_participant(session.participant_id or "")
+    return {
+        "participant_id": session.participant_id,
+        "count":          len(docs),
+        "documents": [
+            {
+                "doc_id":               d.doc_id,
+                "doc_type":             d.doc_type,
+                "doc_type_label":       ds.DOC_TYPE_LABELS.get(d.doc_type, d.doc_type),
+                "filename":             d.filename,
+                "queue_entry_id":       d.queue_entry_id,
+                "uploaded_at":          d.uploaded_at,
+                "verified":             d.verified,
+                "verification_note":    d.verification_note,
+                "sponsor_doc_approved": d.sponsor_doc_approved,
+                "content_preview":      d.content_preview,
+                "download_url":         _minio_url(d.object_key),
+            }
+            for d in docs
+        ],
+    }
+
+
 def _extract_text(filename: str, content: bytes) -> str:
     ext = Path(filename).suffix.lower()
 

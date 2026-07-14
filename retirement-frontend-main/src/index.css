@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-size: 14px;
+}
+
+/* Thin, light-theme-friendly scrollbars for the sidebar / content panes. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: #D4D9E3;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: #B7BECC;
+}
+
+@keyframes msg-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes modal-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-bg-surface border border-border rounded-card shadow-card transition-shadow duration-150;
+  }
+  .msg-enter {
+    animation: msg-fade-in 180ms ease-out;
+  }
+  .modal-backdrop {
+    animation: modal-backdrop-in 150ms ease-out;
+  }
+  .modal-panel {
+    animation: modal-panel-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .input-field {
+    @apply w-full bg-bg-s2 border border-border-strong rounded-md text-text text-sm px-3 py-2
+      outline-none focus:border-accent focus:ring-2 focus:ring-accent/15 transition-colors;
+  }
+  .btn-primary {
+    @apply w-full bg-accent hover:bg-accent-dark text-white rounded-md text-sm font-medium
+      py-2.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm;
+  }
+  .btn-secondary {
+    @apply px-4 py-2 rounded-md text-[13px] font-medium bg-bg-s2 border border-border-strong
+      text-text-muted hover:text-text hover:border-accent/40 transition-colors duration-150
+      disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .label-mono {
+    @apply block text-[11px] font-mono text-text-muted mb-1.5;
+  }
+
+  /* Hover-revealed tooltip used by the Participant Actions cards. Pure CSS
+     so it works without any extra JS dependency. */
+  .tooltip-anchor {
+    @apply relative z-0;
+  }
+  /* Lift the hovered card above all grid siblings so its tooltip clears them. */
+  .tooltip-anchor:hover,
+  .tooltip-anchor:focus-within {
+    @apply z-50;
+  }
+  .tooltip-bubble {
+    @apply pointer-events-none absolute left-1/2 -translate-x-1/2 top-[calc(100%+10px)] w-64
+      bg-[#151B2C] text-white text-xs leading-relaxed rounded-lg px-3.5 py-3 shadow-lg
+      opacity-0 invisible -translate-y-1 transition-all duration-150 z-50;
+  }
+  .tooltip-anchor:hover .tooltip-bubble,
+  .tooltip-anchor:focus-within .tooltip-bubble {
+    @apply opacity-100 visible translate-y-0;
+  }
+  .tooltip-bubble::after {
+    content: '';
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 6px solid transparent;
+    border-bottom-color: #151B2C;
+  }
+  /* Upward variant — for cards in the last row that would overflow below. */
+  .tooltip-bubble--up {
+    @apply top-auto bottom-[calc(100%+10px)] translate-y-1;
+  }
+  .tooltip-anchor:hover .tooltip-bubble--up,
+  .tooltip-anchor:focus-within .tooltip-bubble--up {
+    @apply translate-y-0;
+  }
+  .tooltip-bubble--up::after {
+    bottom: auto;
+    top: 100%;
+    border-bottom-color: transparent;
+    border-top-color: #151B2C;
+  }
+}

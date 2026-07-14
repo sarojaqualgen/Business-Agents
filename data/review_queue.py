@@ -7,6 +7,7 @@ Falls back to in-memory list + review_queue_state.json if DATABASE_URL is not se
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Optional
 from pathlib import Path
 import json
@@ -288,14 +289,15 @@ def reissue_bank_token(entry_id: str) -> Optional[ReviewQueueEntry]:
 
 
 def finalize_disbursed(entry_id: str) -> Optional[ReviewQueueEntry]:
-    """Mark entry as fully disbursed after participant provides bank details."""
+    """Mark entry as disbursed after participant provides bank details."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         from data import db  # noqa: PLC0415
         db.update_review_queue_status(
             entry_id=entry_id,
             new_status="approved",
-            sponsor_note="",
-            resolved_at="",
+            sponsor_note="Disbursed",
+            resolved_at=now,
         )
         return get_entry(entry_id)
     except Exception:
@@ -304,6 +306,8 @@ def finalize_disbursed(entry_id: str) -> Optional[ReviewQueueEntry]:
     entry = next((e for e in _queue if e.entry_id == entry_id and e.status == "approved_awaiting_bank_details"), None)
     if entry:
         entry.status = "approved"
+        entry.sponsor_note = "Disbursed"
+        entry.resolved_at = now
         _save()
     return entry
 

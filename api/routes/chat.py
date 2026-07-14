@@ -32,7 +32,7 @@ async def chat(req: ChatRequest, session: SessionToken = Depends(get_session)):
     )
 
     return StreamingResponse(
-        stream_crew(crew, session.principal_type),
+        stream_crew(crew, session.principal_type, session.participant_id or ""),
         media_type="text/event-stream",
         headers={
             "Cache-Control":    "no-cache",
