@@ -17,7 +17,7 @@ export default function AppLayout({ variant, title, subtitle, children }) {
       <Sidebar variant={variant} isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
       <div className="flex-1 min-w-0 flex flex-col">
         <Header title={title} subtitle={subtitle} onMenuClick={() => setIsSidebarOpen(true)} />
-        <main className="flex-1 px-4 py-5 sm:px-6 sm:py-6 overflow-y-auto">{children}</main>
+        <main className="flex-1 px-4 py-5 sm:px-6 sm:py-6 overflow-y-auto" style={{ animation: 'page-enter 0.45s ease-out both' }}>{children}</main>
       </div>
     </div>
   );

@@ -78,16 +78,23 @@ export default function LoginPage() {
   const [plans, setPlans]                 = useState([]);
   const [formError, setFormError]         = useState(null);
   const [heroIn, setHeroIn]               = useState(false);
-  // Controls whether the right-column form content has faded in
   const [formContentIn, setFormContentIn] = useState(false);
+  // Exit transition states
+  const [loginSuccess, setLoginSuccess]   = useState(false); // welcome flash
+  const [overlayIn, setOverlayIn]         = useState(false); // dark sweep
 
   useEffect(() => { setTimeout(() => setHeroIn(true), 60); }, []);
 
   useEffect(() => {
-    if (isAuthenticated) {
-      const dest = location.state?.from?.pathname || (principalType === 'plan_sponsor' ? '/sponsor' : '/participant');
-      navigate(dest, { replace: true });
-    }
+    if (!isAuthenticated) return;
+    // Step 1 — show welcome flash (right column swaps to success state)
+    setLoginSuccess(true);
+    // Step 2 — dark overlay starts sweeping in after a beat
+    const t1 = setTimeout(() => setOverlayIn(true), 420);
+    // Step 3 — navigate once the overlay fully covers the screen
+    const dest = location.state?.from?.pathname || (principalType === 'plan_sponsor' ? '/sponsor' : '/participant');
+    const t2 = setTimeout(() => navigate(dest, { replace: true }), 900);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
 
@@ -157,6 +164,11 @@ export default function LoginPage() {
         @keyframes role-pop {
           from { opacity: 0; transform: translateY(8px) scale(0.97); }
           to   { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes check-pop {
+          0%   { transform: scale(0.5); opacity: 0; }
+          70%  { transform: scale(1.12); opacity: 1; }
+          100% { transform: scale(1); opacity: 1; }
         }
 
         .portal-cta {
@@ -395,15 +407,44 @@ export default function LoginPage() {
               transform: formContentIn ? 'translateY(0)' : 'translateY(16px)',
               transition: 'opacity 0.4s ease-out, transform 0.4s ease-out',
             }}>
-              <div style={{ marginBottom: 26 }}>
+
+              {/* ── Welcome success state (shown after login completes) ── */}
+              {loginSuccess && (
+                <div style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center',
+                  textAlign: 'center', gap: 0,
+                  animation: 'form-in 0.3s ease-out',
+                }}>
+                  <div style={{
+                    width: 64, height: 64, borderRadius: '50%',
+                    background: 'rgba(21,128,61,0.12)',
+                    border: '2px solid rgba(21,128,61,0.3)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    marginBottom: 20,
+                    animation: 'check-pop 0.45s cubic-bezier(0.16,1,0.3,1)',
+                  }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="#15803D" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" style={{ width: 28, height: 28 }}>
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: '#0C0E14', marginBottom: 6 }}>
+                    Welcome back
+                  </div>
+                  <div style={{ fontSize: 13, color: '#9AA2B4' }}>
+                    Signing you in…
+                  </div>
+                </div>
+              )}
+
+              {!loginSuccess && <div style={{ marginBottom: 26 }}>
                 <h2 style={{ fontSize: 21, fontWeight: 700, color: '#0C0E14', margin: 0 }}>Sign in</h2>
                 <p style={{ fontSize: 13, color: '#9AA2B4', marginTop: 4 }}>
                   {principalType ? 'Enter your details below.' : 'Choose your role to continue.'}
                 </p>
-              </div>
+              </div>}
 
               {/* Role cards */}
-              {!principalType && (
+              {!loginSuccess && !principalType && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {ROLES.map((role, i) => (
                     <button
@@ -440,7 +481,7 @@ export default function LoginPage() {
               )}
 
               {/* Form after role selected */}
-              {principalType && (
+              {!loginSuccess && principalType && (
                 <div style={{ animation: 'form-in 0.3s ease-out' }}>
                   <button
                     className="back-link"
@@ -526,6 +567,15 @@ export default function LoginPage() {
           )}
         </div>
       </div>
+
+      {/* ── Exit overlay — dark sweep covers screen before navigation ── */}
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 200,
+        background: '#0C0E14',
+        opacity: overlayIn ? 1 : 0,
+        pointerEvents: overlayIn ? 'all' : 'none',
+        transition: 'opacity 0.45s ease-in',
+      }} />
     </>
   );
 }
