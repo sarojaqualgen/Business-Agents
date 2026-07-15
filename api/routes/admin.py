@@ -81,6 +81,12 @@ def reset_demo(session: SessionToken = Depends(get_session)):
     report["disbursement_pending"] = "cleared"
     report["consumed_tokens_memory"] = "cleared"
 
+    # 3b — in-memory investment + deferral overrides
+    from data.participants import _election_overrides, _deferral_overrides
+    _election_overrides.clear()
+    _deferral_overrides.clear()
+    report["participant_overrides_memory"] = "cleared"
+
     # 4 — document store (JSON file + in-memory cache)
     try:
         from data import document_store as _ds
@@ -127,20 +133,43 @@ def reset_demo(session: SessionToken = Depends(get_session)):
                 ON CONFLICT (loan_id) DO NOTHING
             """)
 
-            # Restore all participant balances to seeded values
-            seeded_balances = [
-                ("PART-006", 225000.00, 210000.00),
-                ("PART-007",  42000.00,  38000.00),
-                ("PART-008",  92000.00,  85000.00),
-                ("PART-009", 105000.00, 100000.00),
+            # Restore all participant balances and deferral rates to seeded values
+            seeded_participants = [
+                ("PART-006", 225000.00, 210000.00, 0.10, "pre_tax"),
+                ("PART-007",  42000.00,  38000.00, 0.04, "pre_tax"),
+                ("PART-008",  92000.00,  85000.00, 0.06, "pre_tax"),
+                ("PART-009", 105000.00, 100000.00, 0.08, "pre_tax"),
             ]
-            for pid, total, vested in seeded_balances:
+            for pid, total, vested, deferral, d_type in seeded_participants:
                 cur.execute(
-                    "UPDATE participants SET total_balance = %s, vested_balance = %s WHERE participant_id = %s",
-                    (total, vested, pid),
+                    """UPDATE participants
+                       SET total_balance = %s, vested_balance = %s,
+                           current_deferral_pct = %s, deferral_type = %s
+                       WHERE participant_id = %s""",
+                    (total, vested, deferral, d_type, pid),
                 )
 
-        report["postgres"] = "truncated; balances restored; LOAN-0100 restored"
+            # Restore investment elections to seeded values
+            cur.execute("TRUNCATE TABLE participant_investment_elections CASCADE")
+            seeded_elections = [
+                ("PART-006", "PLAN-003", "COF-LIFEPATH-2030", 0.60),
+                ("PART-006", "PLAN-003", "COF-SP500",         0.25),
+                ("PART-006", "PLAN-003", "COF-STABLE",        0.15),
+                ("PART-007", "PLAN-004", "PESP-GOALMAKER-MOD", 1.00),
+                ("PART-008", "PLAN-003", "COF-LIFEPATH-2040", 0.70),
+                ("PART-008", "PLAN-003", "COF-SP500",         0.30),
+                ("PART-009", "PLAN-003", "COF-SP500",         0.70),
+                ("PART-009", "PLAN-003", "COF-STABLE",        0.30),
+            ]
+            for pid, plan_id, fund_id, pct in seeded_elections:
+                cur.execute(
+                    """INSERT INTO participant_investment_elections
+                           (participant_id, plan_id, fund_id, allocation_pct, effective_date)
+                       VALUES (%s, %s, %s, %s, '2024-01-01')""",
+                    (pid, plan_id, fund_id, pct),
+                )
+
+        report["postgres"] = "truncated; balances, deferral rates, and elections restored; LOAN-0100 restored"
     except Exception as e:
         report["postgres"] = f"error: {e}"
 
