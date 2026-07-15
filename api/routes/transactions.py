@@ -418,7 +418,7 @@ def reallocate_investments(body: ReallocateRequest, session: SessionToken = Depe
     }
 
     result = authorize(
-        agent_id="participant-portal",
+        agent_id="AGENT-PARTICIPANT-001",
         principal_type=PrincipalType.participant,
         participant=participant,
         plan=plan,
@@ -426,7 +426,7 @@ def reallocate_investments(body: ReallocateRequest, session: SessionToken = Depe
         payload=payload,
     )
 
-    if result.outcome == "denied":
+    if not result.authorized:
         raise HTTPException(400, f"FAP denied: {result.denial_reason}")
 
     tool = ExecuteTransactionTool()
@@ -434,7 +434,7 @@ def reallocate_investments(body: ReallocateRequest, session: SessionToken = Depe
         participant_id=session.participant_id,
         action="investment_reallocation",
         payload_json=json.dumps(payload),
-        fap_token=result.fap_token,
+        fap_token=result.token,
         autonomy_level="full",
     )
 
@@ -460,7 +460,7 @@ def reallocate_investments(body: ReallocateRequest, session: SessionToken = Depe
             action="investment_reallocation",
             amount=None,
             payload=payload,
-            fap_token_id=result.fap_token,
+            fap_token_id=result.token,
             autonomy_level="full",
         )
     except Exception:
