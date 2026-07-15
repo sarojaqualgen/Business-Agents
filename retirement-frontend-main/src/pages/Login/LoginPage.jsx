@@ -237,12 +237,22 @@ export default function LoginPage() {
 
           {/* Logo */}
           <div style={{
-            display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 0,
+            display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 0,
             opacity: heroIn ? 1 : 0,
             transform: heroIn ? 'translateY(0)' : 'translateY(-10px)',
             transition: 'opacity 0.5s ease-out, transform 0.5s ease-out',
           }}>
-            <QualGenLogo height={30} textDark={false} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <QualGenLogo height={30} iconOnly={true} />
+              <span style={{
+                fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+                fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em',
+                lineHeight: 1,
+              }}>
+                <span style={{ color: '#fff' }}>QualGen</span>
+                <span style={{ color: '#9333EA' }}>.ai</span>
+              </span>
+            </div>
             <div style={{ color: '#F97316', fontSize: 9, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.09em', paddingLeft: 2 }}>
               RETIREMENT PLATFORM
             </div>
