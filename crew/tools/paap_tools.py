@@ -234,14 +234,28 @@ class ExecuteTransactionTool(BaseTool):
                 ]
                 if new_elections:
                     apply_investment_override(participant_id, new_elections)
+                    try:
+                        from data.db import update_investment_elections, get_participant as _db_p
+                        _p = _db_p(participant_id)
+                        if _p:
+                            update_investment_elections(
+                                participant_id, _p.plan_id,
+                                [{"fund_id": e.fund_id, "allocation_pct": e.allocation_pct} for e in new_elections],
+                            )
+                    except Exception:
+                        pass  # in-memory override already applied; DB write is best-effort
 
             if action == "deferral_change" and "new_deferral_pct" in payload:
                 from data.participants import apply_deferral_override
-                apply_deferral_override(
-                    participant_id,
-                    float(payload["new_deferral_pct"]),
-                    deferral_type=payload.get("deferral_type"),
-                )
+                new_pct = float(payload["new_deferral_pct"])
+                d_type = payload.get("deferral_type", "pre_tax")
+                apply_deferral_override(participant_id, new_pct, deferral_type=d_type)
+                try:
+                    from data.db import update_deferral
+                    update_deferral(participant_id, new_pct, d_type)
+                except Exception:
+                    pass  # in-memory override already applied; DB write is best-effort
+
         except Exception as exc:
             # Rollback: un-consume the token so the participant can retry
             from agents.fap.tokens import unconsume_token
