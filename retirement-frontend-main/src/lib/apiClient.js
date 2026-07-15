@@ -145,6 +145,22 @@ export const apiClient = {
     });
   },
 
+  async getDeferralInfo() {
+    return request('/meta/participant/deferral', { auth: true });
+  },
+
+  async changeDeferral({ newDeferralPct, deferralType, catchUp = false }) {
+    return request('/transactions/change-deferral', {
+      method: 'POST',
+      auth: true,
+      body: {
+        new_deferral_pct: newDeferralPct,
+        deferral_type:    deferralType,
+        catch_up:         catchUp,
+      },
+    });
+  },
+
   async health() {
     return request('/health');
   },

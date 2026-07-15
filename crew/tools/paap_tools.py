@@ -31,6 +31,22 @@ def clear_supervised_pending(participant_id: str) -> None:
     _supervised_pending.pop(participant_id, None)
 
 
+def set_supervised_pending(
+    participant_id: str,
+    action: str,
+    payload: dict,
+    payload_json: str,
+    fap_token: str,
+) -> None:
+    """Store a supervised transaction for portal-initiated flows."""
+    _supervised_pending[participant_id] = {
+        "action":       action,
+        "payload":      payload,
+        "payload_json": payload_json,
+        "fap_token":    fap_token,
+    }
+
+
 class GetParticipantSummaryInput(BaseModel):
     participant_id: str = Field(description="Participant ID, e.g. PART-001")
 

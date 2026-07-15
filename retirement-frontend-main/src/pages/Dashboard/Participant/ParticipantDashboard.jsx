@@ -7,6 +7,7 @@ import Overview from './Overview.jsx';
 import Documents from './Documents.jsx';
 import Activity from './Activity.jsx';
 import Investments from './Investments.jsx';
+import ContributionChange from './ContributionChange.jsx';
 import {
   LoanIcon,
   DistributionIcon,
@@ -61,28 +62,7 @@ export default function ParticipantDashboard() {
 
         <Route path="investments" element={<Investments />} />
 
-        <Route
-          path="contribution-change"
-          element={
-            <ActionGuidePage
-              icon={<ContributionIcon />}
-              title="Contribution Change"
-              description="Adjust how much of each paycheck goes into your 401(k), and whether it's pre-tax, Roth, or a catch-up contribution. Note: HCEs must elect catch-up as Roth under SECURE 2.0 §603."
-              citation="IRC §402(g) · SECURE 2.0 §603"
-              fields={[
-                { label: 'New deferral rate', hint: 'e.g. 8%, or $500 per paycheck', required: true },
-                { label: 'Pre-tax or Roth', hint: 'affects how contributions are taxed', required: false },
-                { label: 'Catch-up election', hint: 'if you\'re 50+ and want to contribute more', required: false },
-              ]}
-              examples={[
-                'Change my deferral to 8%',
-                'Set my contribution to 10% pre-tax',
-                'I want to add a Roth catch-up contribution of $7,500',
-                'Stop my contributions — set deferral to 0%',
-              ]}
-            />
-          }
-        />
+        <Route path="contribution-change" element={<ContributionChange />} />
 
         <Route
           path="beneficiary-update"

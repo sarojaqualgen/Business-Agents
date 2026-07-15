@@ -1007,3 +1007,15 @@ def update_investment_elections(participant_id: str, plan_id: str, elections: li
                 """,
                 (participant_id, plan_id, e["fund_id"], e["allocation_pct"]),
             )
+
+
+def update_deferral(participant_id: str, new_deferral_pct: float, deferral_type: str) -> None:
+    """Update a participant's deferral rate and type in the participants table."""
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """UPDATE participants
+               SET current_deferral_pct = %s, deferral_type = %s
+               WHERE participant_id = %s""",
+            (new_deferral_pct, deferral_type, participant_id),
+        )

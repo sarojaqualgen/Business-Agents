@@ -275,3 +275,34 @@ def get_participant_investments(session: SessionToken = Depends(get_session)):
             for f in plan.fund_lineup
         ],
     }
+
+
+@router.get("/participant/deferral")
+def get_participant_deferral(session: SessionToken = Depends(get_session)):
+    """
+    Returns current deferral info for the logged-in participant.
+    Used by the Contribution Change UI.
+    """
+    if session.principal_type not in ("participant", "participant_delegate"):
+        raise HTTPException(403, "Only participants can view deferral info")
+
+    from data.participants import get_participant
+    participant = get_participant(session.participant_id)
+    if not participant:
+        raise HTTPException(404, "Participant not found")
+
+    from data.plans import get_plan
+    plan = get_plan(participant.plan_id)
+    if not plan:
+        raise HTTPException(404, "Plan not found")
+
+    return {
+        "participant_id":       participant.participant_id,
+        "current_deferral_pct": float(participant.current_deferral_pct),
+        "deferral_type":        participant.deferral_type.value,
+        "catch_up_eligible":    participant.age_50_or_older,
+        "is_hce":               participant.is_hce,
+        "blackout_active":      plan.blackout_status.is_active,
+        "plan_allows_roth":     getattr(plan, "allows_roth", True),
+        "annual_compensation":  float(participant.annual_compensation),
+    }

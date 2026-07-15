@@ -28,6 +28,7 @@ from crew.tools.paap_tools import (
     ExecuteTransactionTool,
     clear_supervised_pending,
     get_supervised_pending,
+    set_supervised_pending,
 )
 from data.review_queue import finalize_disbursed, get_entry, reload as rq_reload
 
@@ -472,4 +473,124 @@ def reallocate_investments(body: ReallocateRequest, session: SessionToken = Depe
         "scope":      body.scope,
         "elections":  elections_payload,
         "message":    "Investment elections updated successfully.",
+    }
+
+
+# ── POST /transactions/change-deferral ────────────────────────────────────────
+
+class ChangeDeferralRequest(BaseModel):
+    new_deferral_pct: float  # 0.0–1.0
+    deferral_type: Literal["pre_tax", "roth"] = "pre_tax"
+    catch_up: bool = False
+
+    @field_validator("new_deferral_pct")
+    @classmethod
+    def pct_in_range(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("new_deferral_pct must be between 0.0 and 1.0")
+        return v
+
+
+@router.post("/change-deferral")
+def change_deferral(body: ChangeDeferralRequest, session: SessionToken = Depends(get_session)):
+    """
+    UI-driven deferral rate change.
+
+    - Full autonomy (pct > 0): executes immediately, returns status='executed'.
+    - Supervised autonomy (pct == 0): stores supervised_pending, returns
+      status='requires_confirmation'. UI must then call POST /transactions/confirm.
+    """
+    _participant_only(session)
+
+    from data.participants import get_participant
+    from data.plans import get_plan as _get_plan
+    from agents.fap.agent import authorize
+    from agents.fap.models import ActionType, PrincipalType, AutonomyLevel
+
+    participant = get_participant(session.participant_id)
+    if not participant:
+        raise HTTPException(404, "Participant not found")
+
+    plan = _get_plan(participant.plan_id)
+    if not plan:
+        raise HTTPException(404, "Plan not found")
+
+    payload = {
+        "new_deferral_pct": body.new_deferral_pct,
+        "deferral_type":    body.deferral_type,
+        "catch_up":         body.catch_up,
+    }
+
+    result = authorize(
+        agent_id="AGENT-PARTICIPANT-001",
+        principal_type=PrincipalType.participant,
+        participant=participant,
+        plan=plan,
+        action=ActionType.deferral_change,
+        payload=payload,
+    )
+
+    if not result.authorized:
+        raise HTTPException(400, f"FAP denied: {result.denial_reason}")
+
+    # deferral to 0% → supervised (participant must confirm opt-out intent)
+    if result.autonomy_level == AutonomyLevel.supervised:
+        set_supervised_pending(
+            session.participant_id,
+            action="deferral_change",
+            payload=payload,
+            payload_json=json.dumps(payload),
+            fap_token=result.token,
+        )
+        return {
+            "status":  "requires_confirmation",
+            "action":  "deferral_change",
+            "payload": payload,
+            "warning": "Setting to 0% will stop all retirement contributions. Please confirm.",
+        }
+
+    # Full autonomy — execute immediately
+    tool = ExecuteTransactionTool()
+    raw = tool._run(
+        participant_id=session.participant_id,
+        action="deferral_change",
+        payload_json=json.dumps(payload),
+        fap_token=result.token,
+        autonomy_level="full",
+    )
+
+    try:
+        exec_result = json.loads(raw)
+    except Exception:
+        exec_result = {"status": "unknown", "raw": raw}
+
+    if "error" in exec_result:
+        raise HTTPException(400, exec_result["error"])
+
+    # Persist to DB (best-effort — in-memory override already applied by ExecuteTransactionTool)
+    try:
+        from data import db
+        db.update_deferral(
+            participant_id=session.participant_id,
+            new_deferral_pct=body.new_deferral_pct,
+            deferral_type=body.deferral_type,
+        )
+        db.record_transaction(
+            participant_id=session.participant_id,
+            plan_id=participant.plan_id,
+            action="deferral_change",
+            amount=None,
+            payload=payload,
+            fap_token_id=result.token,
+            autonomy_level="full",
+        )
+    except Exception:
+        pass
+
+    return {
+        "status":          "executed",
+        "action":          "deferral_change",
+        "new_deferral_pct": body.new_deferral_pct,
+        "deferral_type":   body.deferral_type,
+        "message":         f"Deferral rate updated to {body.new_deferral_pct * 100:.1f}% ({body.deferral_type.replace('_', '-')}).",
     }
