@@ -303,6 +303,5 @@ def get_participant_deferral(session: SessionToken = Depends(get_session)):
         "catch_up_eligible":    participant.age_50_or_older,
         "is_hce":               participant.is_hce,
         "blackout_active":      plan.blackout_status.is_active,
-        "plan_allows_roth":     getattr(plan, "allows_roth", True),
-        "annual_compensation":  float(participant.annual_compensation),
+        "annual_compensation":  float(participant.compensation_ytd),
     }
