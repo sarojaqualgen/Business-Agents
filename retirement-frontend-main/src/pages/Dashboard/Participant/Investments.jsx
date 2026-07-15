@@ -304,58 +304,69 @@ export default function Investments() {
         </div>
       </div>
 
-      {/* Submit section */}
-      <div className="card p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4 justify-between">
-        <div className="flex items-center gap-3">
-          <div
-            className={[
-              'w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0',
-              isBalanced ? 'bg-success/15 text-success' : totalPct > 100 ? 'bg-danger/15 text-danger' : 'bg-warning/15 text-warning',
-            ].join(' ')}
-          >
-            {isBalanced ? '✓' : totalPct > 100 ? '!' : totalPct}
+      {/* Submit section — swaps to success banner after apply */}
+      {showSuccess ? (
+        <div className="card p-5 border-success/30 bg-success/5 flex items-center gap-4">
+          <div className="w-10 h-10 rounded-full bg-success/20 text-success flex items-center justify-center text-lg font-bold flex-shrink-0">
+            ✓
           </div>
           <div>
-            {isBalanced
-              ? <p className="text-[13px] font-semibold text-success">Allocations balance to 100% — ready to submit</p>
-              : totalPct > 100
-              ? <p className="text-[13px] font-semibold text-danger">Over-allocated by {totalPct - 100}% — reduce some funds</p>
-              : <p className="text-[13px] font-semibold text-warning">{remaining}% unallocated — assign to a fund to continue</p>
-            }
-            {submitResult?.ok === false && (
-              <p className="text-xs text-danger mt-0.5">{submitResult.msg}</p>
-            )}
-            {showSuccess && (
-              <p className="text-xs text-success mt-0.5">Investment elections updated successfully.</p>
-            )}
+            <p className="text-[14px] font-semibold text-success">Elections updated successfully</p>
+            <p className="text-[12px] text-text-muted mt-0.5">
+              Your investment elections have been saved and are effective immediately.
+            </p>
           </div>
         </div>
+      ) : (
+        <div className="card p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4 justify-between">
+          <div className="flex items-center gap-3">
+            <div
+              className={[
+                'w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0',
+                isBalanced ? 'bg-success/15 text-success' : totalPct > 100 ? 'bg-danger/15 text-danger' : 'bg-warning/15 text-warning',
+              ].join(' ')}
+            >
+              {isBalanced ? '✓' : totalPct > 100 ? '!' : totalPct}
+            </div>
+            <div>
+              {isBalanced
+                ? <p className="text-[13px] font-semibold text-success">Allocations balance to 100% — ready to submit</p>
+                : totalPct > 100
+                ? <p className="text-[13px] font-semibold text-danger">Over-allocated by {totalPct - 100}% — reduce some funds</p>
+                : <p className="text-[13px] font-semibold text-warning">{remaining}% unallocated — assign to a fund to continue</p>
+              }
+              {submitResult?.ok === false && (
+                <p className="text-xs text-danger mt-0.5">{submitResult.msg}</p>
+              )}
+            </div>
+          </div>
 
-        <div className="flex gap-2 flex-shrink-0">
-          <button
-            type="button"
-            onClick={resetToCurrentAllocations}
-            disabled={isSubmitting || isBlackout}
-            className="btn-secondary"
-          >
-            Reset
-          </button>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!isBalanced || isSubmitting || isBlackout}
-            className={[
-              'px-5 py-2 rounded-md text-[13px] font-semibold transition-colors duration-150 shadow-sm',
-              isBalanced && !isBlackout
-                ? 'bg-accent hover:bg-accent-dark text-white'
-                : 'bg-bg-s3 text-text-faint cursor-not-allowed',
-              'disabled:opacity-60 disabled:cursor-not-allowed',
-            ].join(' ')}
-          >
-            {isSubmitting ? 'Applying…' : 'Apply Changes'}
-          </button>
+          <div className="flex gap-2 flex-shrink-0">
+            <button
+              type="button"
+              onClick={resetToCurrentAllocations}
+              disabled={isSubmitting || isBlackout}
+              className="btn-secondary"
+            >
+              Reset
+            </button>
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={!isBalanced || isSubmitting || isBlackout}
+              className={[
+                'px-5 py-2 rounded-md text-[13px] font-semibold transition-colors duration-150 shadow-sm',
+                isBalanced && !isBlackout
+                  ? 'bg-accent hover:bg-accent-dark text-white'
+                  : 'bg-bg-s3 text-text-faint cursor-not-allowed',
+                'disabled:opacity-60 disabled:cursor-not-allowed',
+              ].join(' ')}
+            >
+              {isSubmitting ? 'Applying…' : 'Apply Changes'}
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       <p className="text-[11px] text-text-faint text-center font-mono pb-2">
         All reallocations gate through FAP (12 ERISA rules) before execution · Changes are effective immediately

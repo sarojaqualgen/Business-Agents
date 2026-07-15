@@ -298,39 +298,48 @@ export default function ContributionChange() {
         </div>
       )}
 
-      {/* Submit footer */}
+      {/* Submit footer — swaps to success banner after apply */}
       {!pendingConfirm && (
-        <div className="card p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4 justify-between">
-          <div>
-            {submitError && <p className="text-[13px] text-danger">{submitError}</p>}
-            {showSuccess && (
-              <p className="text-[13px] text-success font-semibold">
-                Deferral rate updated to {pctDisplay(decimalPct)} ({deferralType === 'pre_tax' ? 'pre-tax' : 'Roth'}).
+        showSuccess ? (
+          <div className="card p-5 border-success/30 bg-success/5 flex items-center gap-4">
+            <div className="w-10 h-10 rounded-full bg-success/20 text-success flex items-center justify-center text-lg font-bold flex-shrink-0">
+              ✓
+            </div>
+            <div>
+              <p className="text-[14px] font-semibold text-success">Deferral updated successfully</p>
+              <p className="text-[12px] text-text-muted mt-0.5">
+                New rate: {pctDisplay(decimalPct)} ({deferralType === 'pre_tax' ? 'pre-tax' : 'Roth'}) — effective next payroll cycle.
               </p>
-            )}
-            {!submitError && !showSuccess && (
-              <p className="text-[13px] text-text-muted">
-                {isUnchanged
-                  ? 'No changes to apply'
-                  : `Change deferral from ${pctDisplay(data.current_deferral_pct)} → ${pctDisplay(decimalPct)}`}
-              </p>
-            )}
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={handleApply}
-            disabled={isBusy || isUnchanged || overLimit || roth_catchup_required || numericPct < 0}
-            className={[
-              'px-5 py-2 rounded-md text-[13px] font-semibold transition-colors duration-150 shadow-sm flex-shrink-0',
-              !isBusy && !isUnchanged && !overLimit && !roth_catchup_required
-                ? 'bg-accent hover:bg-accent-dark text-white'
-                : 'bg-bg-s3 text-text-faint cursor-not-allowed',
-              'disabled:opacity-60 disabled:cursor-not-allowed',
-            ].join(' ')}
-          >
-            {isSubmitting ? 'Applying…' : 'Apply Changes'}
-          </button>
-        </div>
+        ) : (
+          <div className="card p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4 justify-between">
+            <div>
+              {submitError && <p className="text-[13px] text-danger">{submitError}</p>}
+              {!submitError && (
+                <p className="text-[13px] text-text-muted">
+                  {isUnchanged
+                    ? 'No changes to apply'
+                    : `Change deferral from ${pctDisplay(data.current_deferral_pct)} → ${pctDisplay(decimalPct)}`}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={handleApply}
+              disabled={isBusy || isUnchanged || overLimit || roth_catchup_required || numericPct < 0}
+              className={[
+                'px-5 py-2 rounded-md text-[13px] font-semibold transition-colors duration-150 shadow-sm flex-shrink-0',
+                !isBusy && !isUnchanged && !overLimit && !roth_catchup_required
+                  ? 'bg-accent hover:bg-accent-dark text-white'
+                  : 'bg-bg-s3 text-text-faint cursor-not-allowed',
+                'disabled:opacity-60 disabled:cursor-not-allowed',
+              ].join(' ')}
+            >
+              {isSubmitting ? 'Applying…' : 'Apply Changes'}
+            </button>
+          </div>
+        )
       )}
 
       <p className="text-[11px] text-text-faint text-center font-mono pb-2">
