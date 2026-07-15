@@ -6,9 +6,9 @@ import ActionGuidePage from '../../../components/participant/ActionGuidePage.jsx
 import Overview from './Overview.jsx';
 import Documents from './Documents.jsx';
 import Activity from './Activity.jsx';
+import Investments from './Investments.jsx';
 import {
   LoanIcon,
-  InvestmentIcon,
   DistributionIcon,
   ContributionIcon,
   BeneficiaryIcon,
@@ -59,27 +59,7 @@ export default function ParticipantDashboard() {
           }
         />
 
-        <Route
-          path="investments"
-          element={
-            <ActionGuidePage
-              icon={<InvestmentIcon />}
-              title="Investment Reallocation"
-              description="Redirect your current balance and future contributions across the plan's fund lineup. Changes execute immediately as a full-autonomy action — no supervisor approval needed."
-              citation="ERISA §404(c)"
-              fields={[
-                { label: 'Target funds', hint: 'fund names from the plan lineup', required: true },
-                { label: 'Allocation %', hint: 'must total 100%', required: true },
-                { label: 'What to reallocate', hint: 'future contributions, current balance, or both', required: false },
-              ]}
-              examples={[
-                'Put 60% in FIDELITY-500 and 40% in VANGUARD-TDF-2040',
-                'Move everything to the QDIA target-date fund',
-                'Reallocate my contributions to 50% large-cap, 30% bond, 20% money market',
-              ]}
-            />
-          }
-        />
+        <Route path="investments" element={<Investments />} />
 
         <Route
           path="contribution-change"

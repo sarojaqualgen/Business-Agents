@@ -65,6 +65,7 @@ const ACTIONS = [
     description: 'Add, remove, or update your primary and contingent beneficiaries.',
     tooltip: 'Submit a beneficiary change for your account. Naming anyone other than your spouse as primary beneficiary may require notarized spousal consent under ERISA §205.',
     to: '/participant/beneficiary-update',
+    comingSoon: true,
   },
   {
     key: 'distribution',
@@ -73,6 +74,7 @@ const ACTIONS = [
     description: 'Request an in-service, separation, RMD, or QDRO distribution.',
     tooltip: 'Distributions are subject to age, employment-status, and RMD rules under ERISA and the IRC, and may require plan sponsor approval before funds are released.',
     to: '/participant/distributions',
+    comingSoon: true,
   },
   {
     key: 'documents',
@@ -176,6 +178,7 @@ export default function Overview() {
               tooltip={action.tooltip}
               to={action.to}
               tooltipUp={action.tooltipUp || false}
+              comingSoon={action.comingSoon || false}
             />
           ))}
         </div>

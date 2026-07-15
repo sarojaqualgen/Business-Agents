@@ -67,8 +67,8 @@ export default function Sidebar({ variant, isOpen = false, onClose }) {
       >
         <div className="flex items-center justify-between px-5 pt-[18px] pb-[14px] border-b border-border">
           <div>
-            <div className="text-[15px] font-semibold tracking-tight">Aldergate</div>
-            <div className="text-[11px] text-text-faint mt-0.5">401(k) Compliance Console</div>
+            <div className="text-[15px] font-semibold tracking-tight">Qualgen</div>
+            <div className="text-[11px] text-text-faint mt-0.5">Retirement Platform</div>
           </div>
           <button
             type="button"

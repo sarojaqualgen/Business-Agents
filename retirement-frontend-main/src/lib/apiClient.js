@@ -133,6 +133,18 @@ export const apiClient = {
     return request('/admin/reset', { method: 'POST', auth: true });
   },
 
+  async getParticipantInvestments() {
+    return request('/meta/participant/investments', { auth: true });
+  },
+
+  async reallocateFunds({ scope, elections }) {
+    return request('/transactions/reallocate', {
+      method: 'POST',
+      auth: true,
+      body: { scope, elections },
+    });
+  },
+
   async health() {
     return request('/health');
   },

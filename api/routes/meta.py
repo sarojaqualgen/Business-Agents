@@ -7,7 +7,7 @@ GET /meta/plans         — list all plans
 GET /meta/actions       — list all valid action types with descriptions
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from data.participants import ALL_PARTICIPANTS
 from data.plans import ALL_PLANS
 from api.auth import SessionToken, get_session
@@ -238,4 +238,48 @@ def list_actions():
                 "example":      "I want to take an in-service distribution",
             },
         ]
+    }
+
+
+@router.get("/participant/investments")
+def get_participant_investments(session: SessionToken = Depends(get_session)):
+    """
+    Returns the plan's fund lineup and the participant's current investment elections.
+    Used by the Investments reallocation UI.
+    """
+    if session.principal_type not in ("participant", "participant_delegate"):
+        raise HTTPException(403, "Only participants can view investment elections")
+
+    from data.participants import get_participant
+    participant = get_participant(session.participant_id)
+    if not participant:
+        raise HTTPException(404, "Participant not found")
+
+    from data.plans import ALL_PLANS as _plans
+    plan = _plans.get(participant.plan_id)
+    if not plan:
+        raise HTTPException(404, "Plan not found")
+
+    election_map = {e.fund_id: e.allocation_pct for e in participant.investment_elections}
+
+    return {
+        "participant_id": participant.participant_id,
+        "plan_id":        participant.plan_id,
+        "blackout_active": plan.blackout_status.is_active,
+        "current_elections": [
+            {"fund_id": e.fund_id, "allocation_pct": e.allocation_pct}
+            for e in participant.investment_elections
+        ],
+        "fund_lineup": [
+            {
+                "fund_id":       f.fund_id,
+                "fund_name":     f.fund_name,
+                "ticker":        f.ticker,
+                "asset_class":   f.asset_class,
+                "expense_ratio": f.expense_ratio,
+                "is_qdia":       f.is_qdia,
+                "current_pct":   election_map.get(f.fund_id, 0.0),
+            }
+            for f in plan.fund_lineup
+        ],
     }

@@ -988,3 +988,22 @@ def get_audit_record_db(audit_id: str) -> Optional[dict]:
         cur.execute("SELECT * FROM fap_audit_log WHERE audit_id = %s", (audit_id,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def update_investment_elections(participant_id: str, plan_id: str, elections: list[dict]) -> None:
+    """Replace all investment elections for a participant (after reallocation)."""
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM participant_investment_elections WHERE participant_id = %s",
+            (participant_id,),
+        )
+        for e in elections:
+            cur.execute(
+                """
+                INSERT INTO participant_investment_elections
+                    (participant_id, plan_id, fund_id, allocation_pct, effective_date)
+                VALUES (%s, %s, %s, %s, CURRENT_DATE)
+                """,
+                (participant_id, plan_id, e["fund_id"], e["allocation_pct"]),
+            )

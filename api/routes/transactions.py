@@ -21,7 +21,7 @@ from decimal import Decimal
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from api.auth import SessionToken, get_session
 from crew.tools.paap_tools import (
@@ -359,4 +359,117 @@ def disburse_transaction(body: DisburseRequest, session: SessionToken = Depends(
             "status":           "initiated",
             "estimated_arrival": "3–5 business days",
         },
+    }
+
+
+# ── POST /transactions/reallocate ─────────────────────────────────────────────
+
+class ElectionItem(BaseModel):
+    fund_id: str
+    allocation_pct: float  # 0.0–1.0
+
+
+class ReallocateRequest(BaseModel):
+    scope: Literal["future_only", "balance_only", "both"] = "both"
+    elections: list[ElectionItem]
+
+    @field_validator("elections")
+    @classmethod
+    def elections_sum_to_one(cls, v: list[ElectionItem]) -> list[ElectionItem]:
+        total = sum(e.allocation_pct for e in v)
+        if abs(total - 1.0) > 0.005:
+            raise ValueError(f"Elections must sum to 1.0 (100%), got {total:.4f}")
+        return v
+
+
+@router.post("/reallocate")
+def reallocate_investments(body: ReallocateRequest, session: SessionToken = Depends(get_session)):
+    """
+    UI-driven investment reallocation.
+    Runs FAP authorization inline (always returns full autonomy for this action),
+    then executes immediately via ExecuteTransactionTool.
+    """
+    _participant_only(session)
+
+    from data.participants import get_participant
+    from data.plans import ALL_PLANS as _plans
+    from agents.fap.agent import authorize
+    from agents.fap.models import ActionType, PrincipalType
+
+    participant = get_participant(session.participant_id)
+    if not participant:
+        raise HTTPException(404, "Participant not found")
+
+    plan = _plans.get(participant.plan_id)
+    if not plan:
+        raise HTTPException(404, "Plan not found")
+
+    # Validate all fund IDs are in the plan lineup
+    valid_fund_ids = {f.fund_id for f in plan.fund_lineup}
+    for e in body.elections:
+        if e.fund_id not in valid_fund_ids:
+            raise HTTPException(400, f"Fund '{e.fund_id}' is not in this plan's lineup")
+
+    elections_payload = [{"fund_id": e.fund_id, "allocation_pct": e.allocation_pct} for e in body.elections]
+
+    payload = {
+        "scope":     body.scope,
+        "elections": elections_payload,
+    }
+
+    result = authorize(
+        agent_id="participant-portal",
+        principal_type=PrincipalType.participant,
+        participant=participant,
+        plan=plan,
+        action=ActionType.investment_reallocation,
+        payload=payload,
+    )
+
+    if result.outcome == "denied":
+        raise HTTPException(400, f"FAP denied: {result.denial_reason}")
+
+    tool = ExecuteTransactionTool()
+    raw = tool._run(
+        participant_id=session.participant_id,
+        action="investment_reallocation",
+        payload_json=json.dumps(payload),
+        fap_token=result.fap_token,
+        autonomy_level="full",
+    )
+
+    try:
+        exec_result = json.loads(raw)
+    except Exception:
+        exec_result = {"status": "unknown", "raw": raw}
+
+    if "error" in exec_result:
+        raise HTTPException(400, exec_result["error"])
+
+    # Persist to DB (best-effort — in-memory override already applied by ExecuteTransactionTool)
+    try:
+        from data import db
+        db.update_investment_elections(
+            participant_id=session.participant_id,
+            plan_id=participant.plan_id,
+            elections=elections_payload,
+        )
+        db.record_transaction(
+            participant_id=session.participant_id,
+            plan_id=participant.plan_id,
+            action="investment_reallocation",
+            amount=None,
+            payload=payload,
+            fap_token_id=result.fap_token,
+            autonomy_level="full",
+        )
+    except Exception:
+        pass
+
+    return {
+        "status":     "executed",
+        "action":     "investment_reallocation",
+        "scope":      body.scope,
+        "elections":  elections_payload,
+        "message":    "Investment elections updated successfully.",
     }
