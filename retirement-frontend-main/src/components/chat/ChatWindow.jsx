@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
+import QualGenLogo from '../../assets/QualGenLogo.jsx';
 import { useChatStream } from '../../hooks/useChatStream.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { initials } from '../../lib/format.js';
@@ -63,11 +64,9 @@ export default function ChatWindow() {
       {/* ── Chat header ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent-dark to-accent flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0">
-            Q
-          </div>
+          <QualGenLogo height={24} textDark={true} />
           <div>
-            <p className="text-sm font-semibold text-text leading-none">Qualgen Assistant</p>
+            <p className="text-sm font-semibold text-text leading-none">Assistant</p>
             {messages.length > 0 && (
               <p className="text-[10px] text-text-faint mt-0.5">{messages.length} message{messages.length !== 1 ? 's' : ''}</p>
             )}
@@ -92,11 +91,9 @@ export default function ChatWindow() {
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-5 flex flex-col gap-4">
         {messages.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center px-6">
-            <div className="w-12 h-12 rounded-full flex items-center justify-center text-sm font-semibold text-white bg-gradient-to-br from-accent-dark to-accent shadow-sm">
-              Q
-            </div>
+            <QualGenLogo height={36} textDark={true} iconOnly={true} />
             <div>
-              <h2 className="text-sm font-semibold text-text mb-1">Ask Qualgen anything</h2>
+              <h2 className="text-sm font-semibold text-text mb-1">Ask QualGen anything</h2>
               <p className="text-xs text-text-muted max-w-sm">
                 Loans, deferral changes, investment reallocation, hardship withdrawals, beneficiary and address
                 updates — all in plain English.

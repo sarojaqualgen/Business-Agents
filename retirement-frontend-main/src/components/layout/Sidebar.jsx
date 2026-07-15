@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import Avatar from '../ui/Avatar.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { titleCase } from '../../lib/format.js';
+import QualGenLogo from '../../assets/QualGenLogo.jsx';
 
 const PARTICIPANT_NAV = [
   { to: '/participant', label: 'Participant Actions', end: true },
@@ -66,9 +67,9 @@ export default function Sidebar({ variant, isOpen = false, onClose }) {
         ].join(' ')}
       >
         <div className="flex items-center justify-between px-5 pt-[18px] pb-[14px] border-b border-border">
-          <div>
-            <div className="text-[15px] font-semibold tracking-tight">Qualgen</div>
-            <div className="text-[11px] text-text-faint mt-0.5">Retirement Platform</div>
+          <div className="flex flex-col gap-0.5">
+            <QualGenLogo height={26} textDark={true} />
+            <div className="text-[10px] text-text-faint font-mono tracking-wide ml-0.5">Retirement Platform</div>
           </div>
           <button
             type="button"

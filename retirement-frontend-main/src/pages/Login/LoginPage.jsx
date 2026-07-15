@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { apiClient } from '../../lib/apiClient.js';
+import QualGenLogo from '../../assets/QualGenLogo.jsx';
 
 const TRUST_ITEMS = [
   { label: '12-Rule ERISA Compliance Engine', detail: 'Every action gates through FAP before execution' },
@@ -236,22 +237,14 @@ export default function LoginPage() {
 
           {/* Logo */}
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 12, marginBottom: 0,
+            display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 0,
             opacity: heroIn ? 1 : 0,
             transform: heroIn ? 'translateY(0)' : 'translateY(-10px)',
             transition: 'opacity 0.5s ease-out, transform 0.5s ease-out',
           }}>
-            <div style={{
-              width: 38, height: 38, borderRadius: 10, background: '#F97316',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: '#fff', fontWeight: 800, fontSize: 16, flexShrink: 0,
-              boxShadow: '0 2px 12px rgba(249,115,22,0.3)',
-            }}>Q</div>
-            <div>
-              <div style={{ color: '#fff', fontSize: 18, fontWeight: 700, lineHeight: 1 }}>Qualgen</div>
-              <div style={{ color: '#F97316', fontSize: 9, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.09em', marginTop: 3 }}>
-                RETIREMENT PLATFORM
-              </div>
+            <QualGenLogo height={30} textDark={false} />
+            <div style={{ color: '#F97316', fontSize: 9, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.09em', paddingLeft: 2 }}>
+              RETIREMENT PLATFORM
             </div>
           </div>
 
