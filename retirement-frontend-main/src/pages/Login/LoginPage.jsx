@@ -5,8 +5,8 @@ import { apiClient } from '../../lib/apiClient.js';
 
 const TRUST_ITEMS = [
   { label: '12-Rule ERISA Compliance Engine', detail: 'Every action gates through FAP before execution' },
-  { label: 'SECURE 2.0 & IRC §72(p) Ready', detail: 'Roth catch-up, RMD reform, loan cap enforcement built-in' },
-  { label: 'ERISA §107 Audit Retention', detail: '6-year FAP audit trail — DOL-ready on demand' },
+  { label: 'SECURE 2.0 & IRC §72(p) Ready',  detail: 'Roth catch-up, RMD reform, loan cap enforcement built-in' },
+  { label: 'ERISA §107 Audit Retention',      detail: '6-year FAP audit trail — DOL-ready on demand' },
 ];
 
 function PersonIcon() {
@@ -20,7 +20,8 @@ function PersonIcon() {
 function BuildingIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" style={{ width: 22, height: 22 }}>
-      <rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 9h.01M15 9h.01M9 15h.01M15 15h.01M9 3v18M3 9h18" />
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M9 9h.01M15 9h.01M9 15h.01M15 15h.01M9 3v18M3 9h18" />
     </svg>
   );
 }
@@ -41,35 +42,35 @@ function ChevronLeft() {
   );
 }
 
+function ShieldCheckIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" style={{ width: 28, height: 28 }}>
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <polyline points="9 12 11 14 15 10" />
+    </svg>
+  );
+}
+
 const ROLES = [
-  { value: 'participant',  label: 'Employee',       sub: 'Participant',  desc: 'View your account, request loans, change contributions', Icon: PersonIcon },
-  { value: 'plan_sponsor', label: 'Administrator',  sub: 'Plan Sponsor', desc: 'Manage the plan, approve requests, view the audit log',  Icon: BuildingIcon },
+  { value: 'participant',  label: 'Employee',      sub: 'Participant',  desc: 'View your account, request loans, change contributions', Icon: PersonIcon },
+  { value: 'plan_sponsor', label: 'Administrator', sub: 'Plan Sponsor', desc: 'Manage the plan, approve requests, view the audit log',  Icon: BuildingIcon },
 ];
+
+const PANEL_BG       = '#0C0E14';
+const STRIPE_TEXTURE = `repeating-linear-gradient(-52deg, transparent, transparent 18px, rgba(255,255,255,0.018) 18px, rgba(255,255,255,0.018) 19px)`;
 
 function isMobile() {
   return typeof window !== 'undefined' && window.innerWidth < 1024;
 }
 
-// Dark charcoal with a barely-visible diagonal technical-drawing stripe.
-// No gradient blobs — those read as generic AI design.
-const PANEL_BG = '#0C0E14';
-const STRIPE_BG = `
-  ${PANEL_BG}
-`;
-const STRIPE_TEXTURE = `repeating-linear-gradient(
-  -52deg,
-  transparent,
-  transparent 18px,
-  rgba(255,255,255,0.018) 18px,
-  rgba(255,255,255,0.018) 19px
-)`;
-
 export default function LoginPage() {
   const { login, isAuthenticated, isLoading } = useAuth();
-  const navigate = useNavigate();
-  const location = useLocation();
+  const navigate  = useNavigate();
+  const location  = useLocation();
 
-  const [phase, setPhase]               = useState(() => (isMobile() ? 'split' : 'hero'));
+  // 'hero' → 'form'
+  // On mobile we skip directly to 'form'.
+  const [phase, setPhase]                 = useState(() => (isMobile() ? 'form' : 'hero'));
   const [principalType, setPrincipalType] = useState(null);
   const [participantId, setParticipantId] = useState('');
   const [planId, setPlanId]               = useState('');
@@ -77,7 +78,8 @@ export default function LoginPage() {
   const [plans, setPlans]                 = useState([]);
   const [formError, setFormError]         = useState(null);
   const [heroIn, setHeroIn]               = useState(false);
-  const [formIn, setFormIn]               = useState(false);
+  // Controls whether the right-column form content has faded in
+  const [formContentIn, setFormContentIn] = useState(false);
 
   useEffect(() => { setTimeout(() => setHeroIn(true), 60); }, []);
 
@@ -120,8 +122,9 @@ export default function LoginPage() {
   }
 
   function openPortal() {
-    setPhase('split');
-    setTimeout(() => setFormIn(true), 480);
+    setPhase('form');
+    // Stagger: let the bg colour transition start first, then fade in form content
+    setTimeout(() => setFormContentIn(true), 320);
   }
 
   async function handleSubmit(e) {
@@ -134,45 +137,48 @@ export default function LoginPage() {
     }
   }
 
-  const isSplit = phase === 'split';
+  const isHero = phase === 'hero';
+
+  // Right column bg & text colour animate on transition
+  const rightBg   = isHero ? 'rgba(255,255,255,0.03)' : '#F6F7F9';
+  const rightBorder = isHero ? '1px solid rgba(255,255,255,0.06)' : '1px solid #E5E8EF';
 
   return (
     <>
       <style>{`
         @keyframes hero-in {
-          from { opacity: 0; transform: translateY(24px); }
+          from { opacity: 0; transform: translateY(22px); }
           to   { opacity: 1; transform: translateY(0); }
         }
-        @keyframes form-slide-in {
+        @keyframes form-in {
           from { opacity: 0; transform: translateY(14px); }
           to   { opacity: 1; transform: translateY(0); }
         }
         @keyframes role-pop {
-          from { opacity: 0; transform: translateY(10px) scale(0.97); }
+          from { opacity: 0; transform: translateY(8px) scale(0.97); }
           to   { opacity: 1; transform: translateY(0) scale(1); }
         }
-        /* Subtle left-border accent line crawls in on load */
-        @keyframes line-grow {
-          from { height: 0; }
-          to   { height: 80px; }
+
+        .portal-cta {
+          transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
         }
-        .portal-btn {
-          transition: background 0.18s ease, box-shadow 0.18s ease, transform 0.15s ease;
+        .portal-cta:hover {
+          background: #EA6C0C !important;
+          transform: translateY(-2px);
+          box-shadow: 0 8px 24px rgba(249,115,22,0.35) !important;
         }
-        .portal-btn:hover {
-          background: rgba(249,115,22,0.15) !important;
-          box-shadow: 0 0 0 1px rgba(249,115,22,0.4);
-          transform: translateX(2px);
-        }
-        .role-card {
-          transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
-        }
+        .portal-cta:active { transform: translateY(0); }
+
+        .role-card { transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease; }
         .role-card:hover {
           border-color: #F97316 !important;
-          box-shadow: 0 0 0 1px rgba(249,115,22,0.25), 0 4px 14px rgba(249,115,22,0.1);
+          box-shadow: 0 0 0 1px rgba(249,115,22,0.22), 0 4px 14px rgba(249,115,22,0.09);
           transform: translateY(-1px);
         }
+
+        .back-link { transition: color 0.15s ease; }
         .back-link:hover { color: #F97316 !important; }
+
         .sign-in-btn { transition: background 0.18s ease, transform 0.15s ease, box-shadow 0.15s ease; }
         .sign-in-btn:hover:not(:disabled) {
           background: #EA6C0C !important;
@@ -182,354 +188,342 @@ export default function LoginPage() {
         .sign-in-btn:active:not(:disabled) { transform: translateY(0); }
       `}</style>
 
+      {/* ── Root shell ────────────────────────────────────────────────────── */}
       <div style={{
-        minHeight: '100vh', display: 'flex', overflow: 'hidden',
-        background: PANEL_BG,
+        minHeight: '100vh',
+        display: 'flex',
+        overflow: 'hidden',
         fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+        background: PANEL_BG,
+        backgroundImage: STRIPE_TEXTURE,
       }}>
 
-        {/* ══════════════════════════════════════════════════════════
-            LEFT BRAND PANEL
-        ══════════════════════════════════════════════════════════ */}
+        {/* ══════════════════════════════════════════════════════════════════
+            LEFT — brand panel (always ~56% wide)
+        ══════════════════════════════════════════════════════════════════ */}
         <div style={{
-          width: isSplit ? '44%' : '100%',
+          width: '56%',
           flexShrink: 0,
           position: 'relative',
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
-          // Diagonal stripe on top of solid base
-          background: PANEL_BG,
-          backgroundImage: STRIPE_TEXTURE,
-          transition: 'width 0.82s cubic-bezier(0.16, 1, 0.3, 1)',
+          padding: '44px 64px',
         }}>
 
-          {/* Left-edge accent bar — always visible, draws on load */}
+          {/* Left-edge accent bar */}
           <div style={{
-            position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)',
-            width: 3, height: heroIn ? 80 : 0,
+            position: 'absolute', left: 0, top: '50%',
+            transform: 'translateY(-50%)',
+            width: 3,
+            height: heroIn ? 72 : 0,
             background: 'linear-gradient(180deg, transparent, #F97316, transparent)',
-            transition: 'height 0.7s ease-out 0.3s',
+            transition: 'height 0.7s ease-out 0.4s',
             borderRadius: 2,
           }} />
 
-          {/* ── HEADER ROW: logo left + portal button right ── */}
+          {/* Logo */}
           <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: isSplit ? '32px 44px 0' : '44px 72px 0',
-            position: 'relative', zIndex: 10,
+            display: 'flex', alignItems: 'center', gap: 12, marginBottom: 0,
             opacity: heroIn ? 1 : 0,
             transform: heroIn ? 'translateY(0)' : 'translateY(-10px)',
-            transition: 'opacity 0.5s ease-out, transform 0.5s ease-out, padding 0.82s cubic-bezier(0.16,1,0.3,1)',
+            transition: 'opacity 0.5s ease-out, transform 0.5s ease-out',
           }}>
-            {/* Logo */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{
-                width: 38, height: 38, borderRadius: 10,
-                background: '#F97316',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: '#fff', fontWeight: 800, fontSize: 16, flexShrink: 0,
-                boxShadow: '0 2px 10px rgba(249,115,22,0.3)',
-              }}>Q</div>
-              <div>
-                <div style={{ color: '#fff', fontSize: 18, fontWeight: 700, lineHeight: 1 }}>Qualgen</div>
-                <div style={{ color: '#F97316', fontSize: 9, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.09em', marginTop: 3 }}>
-                  RETIREMENT PLATFORM
-                </div>
+            <div style={{
+              width: 38, height: 38, borderRadius: 10, background: '#F97316',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: '#fff', fontWeight: 800, fontSize: 16, flexShrink: 0,
+              boxShadow: '0 2px 12px rgba(249,115,22,0.3)',
+            }}>Q</div>
+            <div>
+              <div style={{ color: '#fff', fontSize: 18, fontWeight: 700, lineHeight: 1 }}>Qualgen</div>
+              <div style={{ color: '#F97316', fontSize: 9, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.09em', marginTop: 3 }}>
+                RETIREMENT PLATFORM
               </div>
             </div>
-
-            {/* Access Portal — top right, hidden when already split */}
-            {!isSplit && (
-              <button
-                className="portal-btn"
-                onClick={openPortal}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 7,
-                  background: 'rgba(249,115,22,0.08)',
-                  border: '1px solid rgba(249,115,22,0.28)',
-                  borderRadius: 8,
-                  padding: '8px 16px',
-                  color: '#F97316', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                  letterSpacing: '0.01em',
-                }}
-              >
-                Access Portal <ArrowRight size={13} />
-              </button>
-            )}
           </div>
 
-          {/* ── HERO BODY (landing phase) ── */}
-          {!isSplit && (
+          {/* Hero headline + trust items — grows to fill remaining space */}
+          <div style={{
+            flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center',
+            paddingTop: 16,
+          }}>
+            {/* ERISA pill */}
             <div style={{
-              position: 'relative', zIndex: 10,
-              flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center',
-              padding: '0 72px',
-              maxWidth: 600,
+              display: 'inline-flex', alignItems: 'center', gap: 8,
+              border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 6, padding: '5px 12px',
+              marginBottom: 24, width: 'fit-content',
+              opacity: heroIn ? 1 : 0,
+              animation: heroIn ? 'hero-in 0.5s ease-out 0.08s both' : 'none',
             }}>
-              {/* ERISA pill — more space from logo (padding-top on parent does it naturally) */}
-              <div style={{
-                display: 'inline-flex', alignItems: 'center', gap: 8,
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: 6, padding: '5px 12px',
-                marginBottom: 28, width: 'fit-content',
-                opacity: heroIn ? 1 : 0,
-                animation: heroIn ? 'hero-in 0.5s ease-out 0.05s both' : 'none',
-              }}>
-                <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#F97316', flexShrink: 0 }} />
-                <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: 10, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.07em' }}>
-                  ERISA-COMPLIANT · SECURE 2.0 READY
-                </span>
-              </div>
-
-              <h1 style={{
-                color: '#fff', fontWeight: 800, lineHeight: 1.06,
-                fontSize: 'clamp(40px, 5.5vw, 64px)',
-                letterSpacing: '-0.025em', marginBottom: 20,
-                opacity: heroIn ? 1 : 0,
-                animation: heroIn ? 'hero-in 0.55s ease-out 0.12s both' : 'none',
-              }}>
-                401(k) administration<br />
-                <span style={{ color: '#F97316' }}>built for trust.</span>
-              </h1>
-
-              <p style={{
-                color: 'rgba(255,255,255,0.42)', fontSize: 16, lineHeight: 1.75,
-                maxWidth: 420, marginBottom: 52,
-                opacity: heroIn ? 1 : 0,
-                animation: heroIn ? 'hero-in 0.5s ease-out 0.2s both' : 'none',
-              }}>
-                Every participant action gates through a 12-rule fiduciary
-                compliance engine before execution. No exceptions.
-              </p>
-
-              {/* Trust items */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-                {TRUST_ITEMS.map((item, i) => (
-                  <div key={item.label} style={{
-                    display: 'flex', alignItems: 'flex-start', gap: 14,
-                    opacity: heroIn ? 1 : 0,
-                    animation: heroIn ? `hero-in 0.45s ease-out ${0.28 + i * 0.08}s both` : 'none',
-                  }}>
-                    {/* Small square bracket accent — not a blob */}
-                    <div style={{
-                      width: 4, height: 4, borderRadius: 1,
-                      background: '#F97316', marginTop: 7, flexShrink: 0,
-                    }} />
-                    <div>
-                      <div style={{ color: 'rgba(255,255,255,0.88)', fontSize: 13, fontWeight: 600 }}>{item.label}</div>
-                      <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 11, marginTop: 2, lineHeight: 1.5 }}>{item.detail}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Footer line */}
-              <div style={{
-                marginTop: 56, paddingTop: 20,
-                borderTop: '1px solid rgba(255,255,255,0.06)',
-                color: 'rgba(255,255,255,0.2)', fontSize: 10,
-                fontFamily: 'ui-monospace, monospace',
-                opacity: heroIn ? 1 : 0,
-                animation: heroIn ? 'hero-in 0.4s ease-out 0.55s both' : 'none',
-              }}>
-                qualgen.ai · Demo environment · No real data
-              </div>
+              <div style={{ width: 5, height: 5, borderRadius: '50%', background: '#F97316', flexShrink: 0 }} />
+              <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 10, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.07em' }}>
+                ERISA-COMPLIANT · SECURE 2.0 READY
+              </span>
             </div>
-          )}
 
-          {/* ── COMPACT content (split phase) ── */}
-          {isSplit && (
-            <div style={{
-              position: 'relative', zIndex: 10,
-              flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center',
-              padding: '32px 44px 44px',
-              animation: 'hero-in 0.5s ease-out 0.15s both',
+            <h1 style={{
+              color: '#fff', fontWeight: 800, lineHeight: 1.07,
+              fontSize: 'clamp(34px, 4vw, 56px)',
+              letterSpacing: '-0.025em', marginBottom: 18,
+              opacity: heroIn ? 1 : 0,
+              animation: heroIn ? 'hero-in 0.55s ease-out 0.14s both' : 'none',
             }}>
-              <h2 style={{
-                color: '#fff', fontWeight: 700, fontSize: 24,
-                lineHeight: 1.2, letterSpacing: '-0.015em', marginBottom: 28,
-              }}>
-                401(k)<br />administration<br />
-                <span style={{ color: '#F97316' }}>built for trust.</span>
-              </h2>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {TRUST_ITEMS.map(item => (
-                  <div key={item.label} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                    <div style={{ width: 4, height: 4, borderRadius: 1, background: '#F97316', marginTop: 6, flexShrink: 0 }} />
-                    <div>
-                      <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: 12, fontWeight: 600 }}>{item.label}</div>
-                      <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 11, marginTop: 1 }}>{item.detail}</div>
-                    </div>
+              401(k) administration<br />
+              <span style={{ color: '#F97316' }}>built for trust.</span>
+            </h1>
+
+            <p style={{
+              color: 'rgba(255,255,255,0.4)', fontSize: 15, lineHeight: 1.75,
+              maxWidth: 380, marginBottom: 44,
+              opacity: heroIn ? 1 : 0,
+              animation: heroIn ? 'hero-in 0.5s ease-out 0.2s both' : 'none',
+            }}>
+              Every participant action gates through a 12-rule fiduciary
+              compliance engine before execution. No exceptions.
+            </p>
+
+            {/* Trust items */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+              {TRUST_ITEMS.map((item, i) => (
+                <div key={item.label} style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 12,
+                  opacity: heroIn ? 1 : 0,
+                  animation: heroIn ? `hero-in 0.45s ease-out ${0.28 + i * 0.07}s both` : 'none',
+                }}>
+                  <div style={{ width: 4, height: 4, borderRadius: 1, background: '#F97316', marginTop: 7, flexShrink: 0 }} />
+                  <div>
+                    <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: 13, fontWeight: 600 }}>{item.label}</div>
+                    <div style={{ color: 'rgba(255,255,255,0.33)', fontSize: 11, marginTop: 2, lineHeight: 1.5 }}>{item.detail}</div>
                   </div>
-                ))}
-              </div>
-              <div style={{
-                marginTop: 48, paddingTop: 20,
-                borderTop: '1px solid rgba(255,255,255,0.06)',
-                color: 'rgba(255,255,255,0.18)', fontSize: 10,
-                fontFamily: 'ui-monospace, monospace',
-              }}>
-                qualgen.ai · Demo environment · No real data
-              </div>
+                </div>
+              ))}
             </div>
-          )}
+          </div>
+
+          {/* Footer */}
+          <div style={{
+            color: 'rgba(255,255,255,0.18)', fontSize: 10,
+            fontFamily: 'ui-monospace, monospace',
+            opacity: heroIn ? 1 : 0,
+            animation: heroIn ? 'hero-in 0.4s ease-out 0.52s both' : 'none',
+          }}>
+            qualgen.ai · Demo environment · No real data
+          </div>
         </div>
 
-        {/* ══════════════════════════════════════════════════════════
-            RIGHT FORM PANEL
-        ══════════════════════════════════════════════════════════ */}
+        {/* ══════════════════════════════════════════════════════════════════
+            RIGHT — CTA in hero phase, form in form phase
+            Always 44% wide. Background colour transitions dark → light.
+        ══════════════════════════════════════════════════════════════════ */}
         <div style={{
-          flex: isSplit ? 1 : 0,
+          flex: 1,
           minWidth: 0,
-          overflow: 'hidden',
-          background: '#F6F7F9',
-          display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center',
-          padding: isSplit ? '48px 40px' : '0',
-          opacity: isSplit ? 1 : 0,
-          transition: [
-            'flex 0.82s cubic-bezier(0.16,1,0.3,1)',
-            'opacity 0.4s ease-out 0.38s',
-            'padding 0.82s cubic-bezier(0.16,1,0.3,1)',
-          ].join(', '),
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '44px 40px',
+          borderLeft: rightBorder,
+          background: rightBg,
+          transition: 'background 0.55s ease, border-color 0.55s ease',
+          position: 'relative',
         }}>
-          <div style={{
-            width: '100%', maxWidth: 400,
-            transform: formIn ? 'translateX(0)' : 'translateX(28px)',
-            opacity: formIn ? 1 : 0,
-            transition: 'transform 0.55s cubic-bezier(0.16,1,0.3,1), opacity 0.4s ease-out',
-          }}>
-            <div style={{ marginBottom: 26 }}>
-              <h2 style={{ fontSize: 21, fontWeight: 700, color: '#0C0E14', margin: 0 }}>Sign in</h2>
-              <p style={{ fontSize: 13, color: '#9AA2B4', marginTop: 4 }}>
-                {principalType ? 'Enter your details below.' : 'Choose your role to continue.'}
-              </p>
-            </div>
 
-            {/* Role cards */}
-            {!principalType && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {ROLES.map((role, i) => (
-                  <button
-                    key={role.value}
-                    className="role-card"
-                    onClick={() => selectRole(role.value)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 14,
-                      padding: '17px 18px',
-                      background: '#fff', border: '1.5px solid #E5E8EF',
-                      borderRadius: 12, cursor: 'pointer',
-                      textAlign: 'left', width: '100%',
-                      animation: formIn ? `role-pop 0.38s cubic-bezier(0.16,1,0.3,1) ${0.04 + i * 0.07}s both` : 'none',
-                    }}
-                  >
-                    <div style={{
-                      width: 42, height: 42, borderRadius: 9,
-                      background: '#FFF7ED', color: '#C2410C',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                    }}>
-                      <role.Icon />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
-                        <span style={{ fontSize: 14, fontWeight: 700, color: '#0C0E14' }}>{role.label}</span>
-                        <span style={{ fontSize: 10, color: '#B0B8C8', fontFamily: 'ui-monospace, monospace' }}>{role.sub}</span>
-                      </div>
-                      <div style={{ fontSize: 11, color: '#9AA2B4', marginTop: 2, lineHeight: 1.4 }}>{role.desc}</div>
-                    </div>
-                    <div style={{ color: '#D4D9E3', flexShrink: 0 }}><ArrowRight /></div>
-                  </button>
+          {/* ── HERO phase: centred Access Portal CTA ── */}
+          {isHero && (
+            <div style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              textAlign: 'center', maxWidth: 300, gap: 0,
+              opacity: heroIn ? 1 : 0,
+              animation: heroIn ? 'hero-in 0.55s ease-out 0.35s both' : 'none',
+            }}>
+              {/* Shield icon */}
+              <div style={{
+                width: 64, height: 64, borderRadius: 18,
+                background: 'rgba(249,115,22,0.1)',
+                border: '1px solid rgba(249,115,22,0.2)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: '#F97316', marginBottom: 22,
+              }}>
+                <ShieldCheckIcon />
+              </div>
+
+              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
+                Ready to sign in?
+              </div>
+              <div style={{ color: 'rgba(255,255,255,0.32)', fontSize: 12, lineHeight: 1.6, marginBottom: 32 }}>
+                Access your participant portal or the plan administrator console.
+              </div>
+
+              <button
+                className="portal-cta"
+                onClick={openPortal}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 9,
+                  background: '#F97316', color: '#fff', border: 'none',
+                  borderRadius: 11, padding: '14px 28px',
+                  fontSize: 14, fontWeight: 700, cursor: 'pointer',
+                  boxShadow: '0 4px 18px rgba(249,115,22,0.28)',
+                  width: '100%', justifyContent: 'center',
+                }}
+              >
+                Access Portal <ArrowRight size={15} />
+              </button>
+
+              {/* Subtle stat row */}
+              <div style={{
+                display: 'flex', gap: 24, marginTop: 36,
+                paddingTop: 24, borderTop: '1px solid rgba(255,255,255,0.07)',
+                width: '100%', justifyContent: 'center',
+              }}>
+                {[['12', 'ERISA rules'], ['6yr', 'Audit log'], ['§404(c)', 'Protected']].map(([val, lbl]) => (
+                  <div key={lbl} style={{ textAlign: 'center' }}>
+                    <div style={{ color: '#F97316', fontSize: 14, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }}>{val}</div>
+                    <div style={{ color: 'rgba(255,255,255,0.28)', fontSize: 10, marginTop: 2 }}>{lbl}</div>
+                  </div>
                 ))}
               </div>
-            )}
+            </div>
+          )}
 
-            {/* Form after role selected */}
-            {principalType && (
-              <div style={{ animation: 'form-slide-in 0.32s cubic-bezier(0.16,1,0.3,1)' }}>
-                <button
-                  className="back-link"
-                  onClick={() => { setPrincipalType(null); setFormError(null); }}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 5,
-                    color: '#B0B8C8', fontSize: 12, cursor: 'pointer',
-                    background: 'none', border: 'none', padding: 0, marginBottom: 18,
-                    transition: 'color 0.15s ease',
-                  }}
-                >
-                  <ChevronLeft /> {ROLES.find(r => r.value === principalType)?.label}
-                </button>
-
-                <div style={{
-                  background: '#fff', borderRadius: 14,
-                  border: '1px solid #E5E8EF',
-                  padding: '24px 22px',
-                  boxShadow: '0 1px 4px rgba(16,24,40,0.05)',
-                }}>
-                  <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                    {principalType === 'participant' ? (
-                      <div>
-                        <label style={{ display: 'block', fontSize: 10, fontFamily: 'ui-monospace, monospace', color: '#B0B8C8', letterSpacing: '0.07em', marginBottom: 7 }}>
-                          YOUR ACCOUNT
-                        </label>
-                        <select className="input-field" value={participantId} onChange={e => handleParticipantChange(e.target.value)}>
-                          {participants.length === 0 && <option>Loading…</option>}
-                          {participants.map(p => (
-                            <option key={p.participant_id} value={p.participant_id}>
-                              {p.display_name || p.participant_id}{p.plan_id ? ` · ${p.plan_id}` : ''}
-                            </option>
-                          ))}
-                        </select>
-                        {planId && <p style={{ fontSize: 10, color: '#B0B8C8', marginTop: 5, fontFamily: 'ui-monospace, monospace' }}>Plan: {planId}</p>}
-                      </div>
-                    ) : (
-                      <div>
-                        <label style={{ display: 'block', fontSize: 10, fontFamily: 'ui-monospace, monospace', color: '#B0B8C8', letterSpacing: '0.07em', marginBottom: 7 }}>
-                          PLAN TO MANAGE
-                        </label>
-                        <select className="input-field" value={planId} onChange={e => setPlanId(e.target.value)}>
-                          {plans.length === 0 && <option>Loading…</option>}
-                          {plans.map(p => (
-                            <option key={p.plan_id} value={p.plan_id}>{p.plan_name || p.plan_id}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-
-                    {formError && (
-                      <div style={{
-                        fontSize: 12, color: '#DC2626',
-                        background: '#FEF2F2', border: '1px solid #FECACA',
-                        borderRadius: 8, padding: '9px 12px',
-                      }}>{formError}</div>
-                    )}
-
-                    <button
-                      type="submit"
-                      className="sign-in-btn"
-                      disabled={isLoading}
-                      style={{
-                        background: '#F97316', color: '#fff', border: 'none',
-                        borderRadius: 9, padding: '13px',
-                        fontSize: 14, fontWeight: 700,
-                        cursor: isLoading ? 'not-allowed' : 'pointer',
-                        opacity: isLoading ? 0.65 : 1,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-                        boxShadow: '0 2px 10px rgba(249,115,22,0.2)',
-                        marginTop: 4,
-                      }}
-                    >
-                      {isLoading ? 'Signing in…' : <><span>Sign In</span><ArrowRight size={14} /></>}
-                    </button>
-                  </form>
-                </div>
-
-                <p style={{ fontSize: 10, color: '#C8D0DC', textAlign: 'center', marginTop: 14, fontFamily: 'ui-monospace, monospace' }}>
-                  Demo login — no password required
+          {/* ── FORM phase: role select → account select ── */}
+          {!isHero && (
+            <div style={{
+              width: '100%', maxWidth: 380,
+              opacity: formContentIn ? 1 : 0,
+              transform: formContentIn ? 'translateY(0)' : 'translateY(16px)',
+              transition: 'opacity 0.4s ease-out, transform 0.4s ease-out',
+            }}>
+              <div style={{ marginBottom: 26 }}>
+                <h2 style={{ fontSize: 21, fontWeight: 700, color: '#0C0E14', margin: 0 }}>Sign in</h2>
+                <p style={{ fontSize: 13, color: '#9AA2B4', marginTop: 4 }}>
+                  {principalType ? 'Enter your details below.' : 'Choose your role to continue.'}
                 </p>
               </div>
-            )}
-          </div>
+
+              {/* Role cards */}
+              {!principalType && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {ROLES.map((role, i) => (
+                    <button
+                      key={role.value}
+                      className="role-card"
+                      onClick={() => selectRole(role.value)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 14,
+                        padding: '17px 18px',
+                        background: '#fff', border: '1.5px solid #E5E8EF',
+                        borderRadius: 12, cursor: 'pointer',
+                        textAlign: 'left', width: '100%',
+                        animation: formContentIn ? `role-pop 0.36s cubic-bezier(0.16,1,0.3,1) ${0.04 + i * 0.07}s both` : 'none',
+                      }}
+                    >
+                      <div style={{
+                        width: 42, height: 42, borderRadius: 9,
+                        background: '#FFF7ED', color: '#C2410C',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                      }}>
+                        <role.Icon />
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
+                          <span style={{ fontSize: 14, fontWeight: 700, color: '#0C0E14' }}>{role.label}</span>
+                          <span style={{ fontSize: 10, color: '#B0B8C8', fontFamily: 'ui-monospace, monospace' }}>{role.sub}</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: '#9AA2B4', marginTop: 2, lineHeight: 1.4 }}>{role.desc}</div>
+                      </div>
+                      <div style={{ color: '#D4D9E3', flexShrink: 0 }}><ArrowRight /></div>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Form after role selected */}
+              {principalType && (
+                <div style={{ animation: 'form-in 0.3s ease-out' }}>
+                  <button
+                    className="back-link"
+                    onClick={() => { setPrincipalType(null); setFormError(null); }}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 5,
+                      color: '#B0B8C8', fontSize: 12, cursor: 'pointer',
+                      background: 'none', border: 'none', padding: 0, marginBottom: 18,
+                    }}
+                  >
+                    <ChevronLeft /> {ROLES.find(r => r.value === principalType)?.label}
+                  </button>
+
+                  <div style={{
+                    background: '#fff', borderRadius: 14,
+                    border: '1px solid #E5E8EF', padding: '24px 22px',
+                    boxShadow: '0 1px 4px rgba(16,24,40,0.05)',
+                  }}>
+                    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                      {principalType === 'participant' ? (
+                        <div>
+                          <label style={{ display: 'block', fontSize: 10, fontFamily: 'ui-monospace, monospace', color: '#B0B8C8', letterSpacing: '0.07em', marginBottom: 7 }}>
+                            YOUR ACCOUNT
+                          </label>
+                          <select className="input-field" value={participantId} onChange={e => handleParticipantChange(e.target.value)}>
+                            {participants.length === 0 && <option>Loading…</option>}
+                            {participants.map(p => (
+                              <option key={p.participant_id} value={p.participant_id}>
+                                {p.display_name || p.participant_id}{p.plan_id ? ` · ${p.plan_id}` : ''}
+                              </option>
+                            ))}
+                          </select>
+                          {planId && <p style={{ fontSize: 10, color: '#B0B8C8', marginTop: 5, fontFamily: 'ui-monospace, monospace' }}>Plan: {planId}</p>}
+                        </div>
+                      ) : (
+                        <div>
+                          <label style={{ display: 'block', fontSize: 10, fontFamily: 'ui-monospace, monospace', color: '#B0B8C8', letterSpacing: '0.07em', marginBottom: 7 }}>
+                            PLAN TO MANAGE
+                          </label>
+                          <select className="input-field" value={planId} onChange={e => setPlanId(e.target.value)}>
+                            {plans.length === 0 && <option>Loading…</option>}
+                            {plans.map(p => (
+                              <option key={p.plan_id} value={p.plan_id}>{p.plan_name || p.plan_id}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {formError && (
+                        <div style={{
+                          fontSize: 12, color: '#DC2626',
+                          background: '#FEF2F2', border: '1px solid #FECACA',
+                          borderRadius: 8, padding: '9px 12px',
+                        }}>{formError}</div>
+                      )}
+
+                      <button
+                        type="submit"
+                        className="sign-in-btn"
+                        disabled={isLoading}
+                        style={{
+                          background: '#F97316', color: '#fff', border: 'none',
+                          borderRadius: 9, padding: '13px',
+                          fontSize: 14, fontWeight: 700,
+                          cursor: isLoading ? 'not-allowed' : 'pointer',
+                          opacity: isLoading ? 0.65 : 1,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+                          boxShadow: '0 2px 10px rgba(249,115,22,0.2)',
+                          marginTop: 4,
+                        }}
+                      >
+                        {isLoading ? 'Signing in…' : <><span>Sign In</span><ArrowRight size={14} /></>}
+                      </button>
+                    </form>
+                  </div>
+
+                  <p style={{ fontSize: 10, color: '#C8D0DC', textAlign: 'center', marginTop: 14, fontFamily: 'ui-monospace, monospace' }}>
+                    Demo login — no password required
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </>
