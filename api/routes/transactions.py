@@ -392,7 +392,7 @@ def reallocate_investments(body: ReallocateRequest, session: SessionToken = Depe
     _participant_only(session)
 
     from data.participants import get_participant
-    from data.plans import ALL_PLANS as _plans
+    from data.plans import get_plan as _get_plan
     from agents.fap.agent import authorize
     from agents.fap.models import ActionType, PrincipalType
 
@@ -400,7 +400,7 @@ def reallocate_investments(body: ReallocateRequest, session: SessionToken = Depe
     if not participant:
         raise HTTPException(404, "Participant not found")
 
-    plan = _plans.get(participant.plan_id)
+    plan = _get_plan(participant.plan_id)
     if not plan:
         raise HTTPException(404, "Plan not found")
 

@@ -42,13 +42,5 @@ def get_participant(participant_id: str) -> ParticipantRecord | None:
     return p
 
 
-ALL_PARTICIPANTS: dict[str, ParticipantRecord] = {}
-for _pid in all_participant_ids():
-    _p = get_participant(_pid)
-    if _p:
-        ALL_PARTICIPANTS[_pid] = _p
-
-PART_006 = ALL_PARTICIPANTS.get("PART-006")
-PART_007 = ALL_PARTICIPANTS.get("PART-007")
-PART_008 = ALL_PARTICIPANTS.get("PART-008")
-PART_009 = ALL_PARTICIPANTS.get("PART-009")
+def get_participant_ids() -> list[str]:
+    return all_participant_ids()

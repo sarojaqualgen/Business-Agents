@@ -253,7 +253,7 @@ export default function LoginPage() {
                 <span style={{ color: '#9333EA' }}>.ai</span>
               </span>
             </div>
-            <div style={{ color: '#F97316', fontSize: 9, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.09em', paddingLeft: 2 }}>
+            <div style={{ color: '#F97316', fontSize: 12, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.09em', paddingLeft: 3}}>
               RETIREMENT PLATFORM
             </div>
           </div>

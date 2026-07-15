@@ -8,8 +8,6 @@ GET /meta/actions       — list all valid action types with descriptions
 """
 
 from fastapi import APIRouter, Depends, HTTPException
-from data.participants import ALL_PARTICIPANTS
-from data.plans import ALL_PLANS
 from api.auth import SessionToken, get_session
 
 router = APIRouter()
@@ -17,28 +15,17 @@ router = APIRouter()
 
 @router.get("/participants")
 def list_participants():
-    # Fetch display names from DB (best-effort — falls back to participant_id
-    # when the database is unavailable so the login page still renders).
-    name_map: dict[str, str] = {}
-    try:
-        from data.db import get_conn
-        conn = get_conn()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT participant_id, first_name, last_name FROM participants")
-            for row in cur.fetchall():
-                name_map[row["participant_id"]] = f"{row['first_name']} {row['last_name']}"
-        finally:
-            conn.close()
-    except Exception:
-        pass
-
+    from data.db import all_participant_ids
+    from data.participants import get_participant
     result = []
-    for pid, p in ALL_PARTICIPANTS.items():
+    for pid in all_participant_ids():
+        p = get_participant(pid)
+        if not p:
+            continue
         result.append({
             "participant_id":    p.participant_id,
             "plan_id":           p.plan_id,
-            "display_name":      name_map.get(p.participant_id, p.participant_id),
+            "display_name":      getattr(p, "display_name", None) or p.participant_id,
             "employment_status": p.employment_status.value,
             "years_of_service":  p.years_of_vesting_service,
             "vesting_pct":       p.vesting_percentage,
@@ -52,14 +39,19 @@ def list_participants():
 
 @router.get("/plans")
 def list_plans():
+    from data.db import all_plan_ids
+    from data.plans import get_plan
     result = []
-    for pid, plan in ALL_PLANS.items():
+    for pid in all_plan_ids():
+        plan = get_plan(pid)
+        if not plan:
+            continue
         result.append({
-            "plan_id":         plan.plan_id,
-            "plan_name":       plan.plan_name,
-            "plan_type":       plan.plan_type.value,
-            "blackout_active": plan.blackout_status.is_active,
-            "loans_permitted": plan.loan_policy.loans_permitted,
+            "plan_id":            plan.plan_id,
+            "plan_name":          plan.plan_name,
+            "plan_type":          plan.plan_type.value,
+            "blackout_active":    plan.blackout_status.is_active,
+            "loans_permitted":    plan.loan_policy.loans_permitted,
             "hardship_permitted": plan.hardship_policy.hardship_permitted,
         })
     return {"count": len(result), "plans": result}
@@ -255,8 +247,8 @@ def get_participant_investments(session: SessionToken = Depends(get_session)):
     if not participant:
         raise HTTPException(404, "Participant not found")
 
-    from data.plans import ALL_PLANS as _plans
-    plan = _plans.get(participant.plan_id)
+    from data.plans import get_plan
+    plan = get_plan(participant.plan_id)
     if not plan:
         raise HTTPException(404, "Plan not found")
 

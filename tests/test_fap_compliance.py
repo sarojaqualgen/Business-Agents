@@ -38,8 +38,15 @@ from agents.fap.compliance import (
 )
 from agents.fap.models import ActionType, AutonomyLevel, DenialCode, PrincipalType
 from agents.plap.models import BlackoutStatus
-from data.participants import PART_006, PART_007, PART_008, PART_009
-from data.plans import PLAN_003, PLAN_004
+from data.participants import get_participant as _get_p
+from data.plans import get_plan as _get_plan
+
+PART_006 = _get_p("PART-006")
+PART_007 = _get_p("PART-007")
+PART_008 = _get_p("PART-008")
+PART_009 = _get_p("PART-009")
+PLAN_003 = _get_plan("PLAN-003")
+PLAN_004 = _get_plan("PLAN-004")
 
 
 # ---------------------------------------------------------------------------
