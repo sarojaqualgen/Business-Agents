@@ -37,8 +37,8 @@ export default function AuditLog() {
           ? (r.authorized ? 'approved' : 'denied')
           : (r.result || '—'),
         autonomy:       r.autonomy_level || r.autonomy || '—',
-        citation:       r.citation || '—',
-        note:           r.denial_reason || r.note || '—',
+        citation:       r.erisa_citation || '—',
+        note:           r.denial_reason || r.denial_code || '—',
       })));
     } catch {
       // leave existing state on error

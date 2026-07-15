@@ -35,16 +35,18 @@ def audit_log(session: SessionToken = Depends(get_session)):
         "note":  "Audit log stored in PostgreSQL fap_audit_log (falls back to in-memory if DB unavailable).",
         "records": [
             {
-                "audit_id":       r.audit_id,
-                "timestamp":      r.timestamp,
-                "agent_id":       r.agent_id,
-                "participant_id": r.participant_id,
-                "plan_id":        r.plan_id,
-                "action":         r.action,
-                "authorized":     r.authorized,
-                "autonomy_level": getattr(r, "autonomy_level", None),
-                "denial_code":    getattr(r, "denial_code", None),
-                "denial_reason":  getattr(r, "denial_reason", None),
+                "audit_id":           r.audit_id,
+                "timestamp":          r.timestamp,
+                "agent_id":           r.agent_id,
+                "participant_id":     r.participant_id,
+                "plan_id":            r.plan_id,
+                "action":             r.action,
+                "authorized":         r.authorized,
+                "autonomy_level":     getattr(r, "autonomy_level", None),
+                "denial_code":        getattr(r, "denial_code", None),
+                "denial_reason":      getattr(r, "denial_reason", None),
+                "erisa_citation":     getattr(r, "erisa_citation", None),
+                "master_ref_section": getattr(r, "master_ref_section", None),
             }
             for r in records
         ],
