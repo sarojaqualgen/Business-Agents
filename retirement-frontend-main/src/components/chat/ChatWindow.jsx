@@ -22,6 +22,7 @@ export default function ChatWindow() {
     isStreaming,
     isResolving,
     sendMessage,
+    sendFastMessage,
     confirmTransaction,
     cancelTransaction,
     clearChat,
@@ -29,6 +30,8 @@ export default function ChatWindow() {
     submitBankDetails,
     dismissBankDetails,
   } = useChatStream();
+
+  const [fastMode, setFastMode] = useState(true);
 
   const location = useLocation();
 
@@ -72,19 +75,35 @@ export default function ChatWindow() {
             )}
           </div>
         </div>
-        {messages.length > 0 && (
+        <div className="flex items-center gap-3">
+          {/* Fast / CrewAI toggle */}
           <button
             type="button"
-            onClick={clearChat}
-            title="Clear conversation"
-            className="flex items-center gap-1.5 text-xs text-text-faint hover:text-danger transition-colors px-2 py-1 rounded-md hover:bg-danger/8"
+            onClick={() => setFastMode((v) => !v)}
+            title={fastMode ? 'Switch to CrewAI (slower, more capable)' : 'Switch to Fast mode (Haiku, ~5s)'}
+            className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border transition-colors ${
+              fastMode
+                ? 'border-accent/50 text-accent bg-accent/8'
+                : 'border-border text-text-muted hover:text-text'
+            }`}
           >
-            <svg viewBox="0 0 20 20" className="w-3.5 h-3.5 fill-current">
-              <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zm-1 7a1 1 0 112 0v3a1 1 0 11-2 0V9zm4 0a1 1 0 112 0v3a1 1 0 11-2 0V9z" clipRule="evenodd"/>
-            </svg>
-            Clear chat
+            {fastMode ? '⚡ Fast' : '🤖 CrewAI'}
           </button>
-        )}
+
+          {messages.length > 0 && (
+            <button
+              type="button"
+              onClick={clearChat}
+              title="Clear conversation"
+              className="flex items-center gap-1.5 text-xs text-text-faint hover:text-danger transition-colors px-2 py-1 rounded-md hover:bg-danger/8"
+            >
+              <svg viewBox="0 0 20 20" className="w-3.5 h-3.5 fill-current">
+                <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zm-1 7a1 1 0 112 0v3a1 1 0 11-2 0V9zm4 0a1 1 0 112 0v3a1 1 0 11-2 0V9z" clipRule="evenodd"/>
+              </svg>
+              Clear chat
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ── Transcript ──────────────────────────────────────────────────────── */}
@@ -160,7 +179,7 @@ export default function ChatWindow() {
       <ChatInput
         value={draft}
         onChange={setDraft}
-        onSend={(msg) => { sendMessage(msg); }}
+        onSend={(msg) => { fastMode ? sendFastMessage(msg) : sendMessage(msg); }}
         disabled={blocked}
       />
     </div>

@@ -53,7 +53,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api import auth
-from api.routes import chat, documents, queue, admin, transactions, meta
+from api.routes import chat, chat_fast, documents, queue, admin, transactions, meta, plap, paap
 
 app = FastAPI(
     title="Aldergate ERISA API",
@@ -72,10 +72,13 @@ app.add_middleware(
 app.include_router(auth.router,         prefix="/auth",         tags=["Auth"])
 app.include_router(meta.router,         prefix="/meta",         tags=["Meta"])
 app.include_router(chat.router,                                 tags=["Chat"])
+app.include_router(chat_fast.router,                            tags=["Chat Fast"])
 app.include_router(transactions.router, prefix="/transactions", tags=["Transactions"])
 app.include_router(documents.router,    prefix="/documents",    tags=["Documents"])
 app.include_router(queue.router,        prefix="/queue",        tags=["Queue"])
 app.include_router(admin.router,        prefix="/admin",        tags=["Admin"])
+app.include_router(plap.router,         prefix="/plap",          tags=["PLAP"])
+app.include_router(paap.router,         prefix="/paap",          tags=["PAAP"])
 
 
 @app.get("/health", tags=["Health"])

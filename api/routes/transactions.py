@@ -24,6 +24,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 
 from api.auth import SessionToken, get_session
+from agents.paap.agent import (
+    execute as paap_execute,
+    execute_confirmed,
+    get_participant_plan_id,
+    ParticipantNotFound,
+    PlanDoesNotSupportAction,
+    UnauthorizedByFAP,
+)
 from crew.tools.paap_tools import (
     ExecuteTransactionTool,
     clear_supervised_pending,
@@ -198,33 +206,19 @@ def confirm_transaction(session: SessionToken = Depends(get_session)):
             "message": "Transaction confirmed. Please provide your bank details to receive the funds.",
         }
 
-    # Non-disbursement supervised action (e.g. deferral to 0%) — execute now
+    # Non-disbursement supervised action (e.g. deferral to 0%) — execute now via PAAP
     clear_supervised_pending(session.participant_id)
-    tool = ExecuteTransactionTool()
-    raw = tool._run(
-        participant_id=session.participant_id,
-        action=action,
-        payload_json=pending["payload_json"],
-        fap_token=pending["fap_token"],
-        autonomy_level="full",
-    )
-
     try:
-        result = json.loads(raw)
-    except Exception:
-        result = {"status": "unknown", "raw": raw}
-
-    if "error" in result:
-        raise HTTPException(400, result["error"])
-
-    _record_execution(
-        participant_id=session.participant_id,
-        plan_id=session.plan_id or "",
-        action=action,
-        payload=pending.get("payload", {}),
-        fap_token=pending["fap_token"],
-        autonomy_level="supervised",
-    )
+        result = execute_confirmed(
+            participant_id=session.participant_id,
+            action=action,
+            payload=pending["payload"],
+            fap_token=pending["fap_token"],
+        )
+    except UnauthorizedByFAP as e:
+        raise HTTPException(400, f"Token validation failed: {e.denial_reason}")
+    except ParticipantNotFound as e:
+        raise HTTPException(404, str(e))
     return result
 
 
@@ -292,14 +286,20 @@ def disburse_transaction(body: DisburseRequest, session: SessionToken = Depends(
                 "It must be approved by your plan sponsor first."
             )
 
-        tool = ExecuteTransactionTool()
-        raw = tool._run(
-            participant_id=session.participant_id,
-            action=entry.action,
-            payload_json=json.dumps(entry.payload),
-            fap_token=entry.fap_token,
-            autonomy_level="full",
-        )
+        try:
+            result = execute_confirmed(
+                participant_id=session.participant_id,
+                action=entry.action,
+                payload=entry.payload,
+                fap_token=entry.fap_token,
+            )
+        except UnauthorizedByFAP as e:
+            raise HTTPException(400, f"Token validation failed: {e.denial_reason}")
+        except ParticipantNotFound as e:
+            raise HTTPException(404, str(e))
+
+        # Mark queue entry done only after PAAP execution succeeded
+        finalize_disbursed(body.entry_id)
 
     else:
         # ── Supervised disbursement ────────────────────────────────────
@@ -311,45 +311,20 @@ def disburse_transaction(body: DisburseRequest, session: SessionToken = Depends(
                 "Call POST /transactions/confirm first."
             )
 
-        tool = ExecuteTransactionTool()
-        raw = tool._run(
-            participant_id=session.participant_id,
-            action=pending["action"],
-            payload_json=pending["payload_json"],
-            fap_token=pending["fap_token"],
-            autonomy_level="full",
-        )
+        try:
+            result = execute_confirmed(
+                participant_id=session.participant_id,
+                action=pending["action"],
+                payload=pending["payload"],
+                fap_token=pending["fap_token"],
+            )
+        except UnauthorizedByFAP as e:
+            raise HTTPException(400, f"Token validation failed: {e.denial_reason}")
+        except ParticipantNotFound as e:
+            raise HTTPException(404, str(e))
 
-    try:
-        result = json.loads(raw)
-    except Exception:
-        result = {"status": "unknown", "raw": raw}
-
-    if "error" in result:
-        raise HTTPException(400, result["error"])
-
-    # Only mark entry as done / clear pending AFTER confirming execution succeeded
-    if body.entry_id:
-        finalize_disbursed(body.entry_id)
-        _record_execution(
-            participant_id=session.participant_id,
-            plan_id=entry.plan_id,
-            action=entry.action,
-            payload=entry.payload,
-            fap_token=entry.fap_token,
-            autonomy_level="human_review",
-            queue_entry_id=body.entry_id,
-        )
-    else:
+        # Clear pending only after PAAP execution succeeded
         _clear_disbursement_pending(session.participant_id)
-        _record_execution(
-            participant_id=session.participant_id,
-            plan_id=session.plan_id or "",
-            action=pending["action"],
-            payload=pending.get("payload", {}),
-            fap_token=pending["fap_token"],
-            autonomy_level="supervised",
-        )
 
     return {
         **result,
@@ -386,93 +361,46 @@ class ReallocateRequest(BaseModel):
 @router.post("/reallocate")
 def reallocate_investments(body: ReallocateRequest, session: SessionToken = Depends(get_session)):
     """
-    UI-driven investment reallocation.
-    Runs FAP authorization inline (always returns full autonomy for this action),
-    then executes immediately via ExecuteTransactionTool.
+    UI-driven investment reallocation. Routes through PAAP → PLAP → FAP → execute.
+    Always returns full autonomy for this action type.
     """
     _participant_only(session)
 
-    from data.participants import get_participant
-    from data.plans import get_plan as _get_plan
-    from agents.fap.agent import authorize
-    from agents.fap.models import ActionType, PrincipalType
+    from agents.plap.agent import query_fund_lineup
 
-    participant = get_participant(session.participant_id)
-    if not participant:
-        raise HTTPException(404, "Participant not found")
+    # Validate fund IDs are in the plan lineup — ask PLAP, not DB directly
+    try:
+        plan_id = get_participant_plan_id(session.participant_id)
+    except ParticipantNotFound as e:
+        raise HTTPException(404, str(e))
 
-    plan = _get_plan(participant.plan_id)
-    if not plan:
-        raise HTTPException(404, "Plan not found")
-
-    # Validate all fund IDs are in the plan lineup
-    valid_fund_ids = {f.fund_id for f in plan.fund_lineup}
+    fund_data = query_fund_lineup(plan_id)
+    valid_fund_ids = {f["fund_id"] for f in fund_data.get("funds", [])}
     for e in body.elections:
         if e.fund_id not in valid_fund_ids:
             raise HTTPException(400, f"Fund '{e.fund_id}' is not in this plan's lineup")
 
     elections_payload = [{"fund_id": e.fund_id, "allocation_pct": e.allocation_pct} for e in body.elections]
-
-    payload = {
-        "scope":     body.scope,
-        "elections": elections_payload,
-    }
-
-    result = authorize(
-        agent_id="AGENT-PARTICIPANT-001",
-        principal_type=PrincipalType.participant,
-        participant=participant,
-        plan=plan,
-        action=ActionType.investment_reallocation,
-        payload=payload,
-    )
-
-    if not result.authorized:
-        raise HTTPException(400, f"FAP denied: {result.denial_reason}")
-
-    tool = ExecuteTransactionTool()
-    raw = tool._run(
-        participant_id=session.participant_id,
-        action="investment_reallocation",
-        payload_json=json.dumps(payload),
-        fap_token=result.token,
-        autonomy_level="full",
-    )
+    payload = {"scope": body.scope, "elections": elections_payload}
 
     try:
-        exec_result = json.loads(raw)
-    except Exception:
-        exec_result = {"status": "unknown", "raw": raw}
-
-    if "error" in exec_result:
-        raise HTTPException(400, exec_result["error"])
-
-    # Persist to DB (best-effort — in-memory override already applied by ExecuteTransactionTool)
-    try:
-        from data import db
-        db.update_investment_elections(
+        paap_execute(
             participant_id=session.participant_id,
-            plan_id=participant.plan_id,
-            elections=elections_payload,
-        )
-        db.record_transaction(
-            participant_id=session.participant_id,
-            plan_id=participant.plan_id,
+            agent_id=session.agent_id or "portal",
             action="investment_reallocation",
-            amount=None,
             payload=payload,
-            fap_token_id=result.token,
-            autonomy_level="full",
         )
-    except Exception:
-        pass
+    except ParticipantNotFound as e:
+        raise HTTPException(404, str(e))
+    except UnauthorizedByFAP as e:
+        raise HTTPException(400, f"FAP denied: {e.denial_reason}")
 
     return {
-        "status":     "executed",
-        "action":     "investment_reallocation",
-        "scope":      body.scope,
-        "elections":  elections_payload,
-        "message":    "Investment elections updated successfully.",
+        "status":    "executed",
+        "action":    "investment_reallocation",
+        "scope":     body.scope,
+        "elections": elections_payload,
+        "message":   "Investment elections updated successfully.",
     }
 
 
@@ -494,26 +422,13 @@ class ChangeDeferralRequest(BaseModel):
 @router.post("/change-deferral")
 def change_deferral(body: ChangeDeferralRequest, session: SessionToken = Depends(get_session)):
     """
-    UI-driven deferral rate change.
+    UI-driven deferral rate change. Routes through PAAP → PLAP → FAP → execute.
 
-    - Full autonomy (pct > 0): executes immediately, returns status='executed'.
-    - Supervised autonomy (pct == 0): stores supervised_pending, returns
-      status='requires_confirmation'. UI must then call POST /transactions/confirm.
+    - Full autonomy (pct > 0): PAAP executes immediately, returns status='executed'.
+    - Supervised autonomy (pct == 0): PAAP returns fap_token, caller stores it,
+      returns status='requires_confirmation'. UI must then call POST /transactions/confirm.
     """
     _participant_only(session)
-
-    from data.participants import get_participant
-    from data.plans import get_plan as _get_plan
-    from agents.fap.agent import authorize
-    from agents.fap.models import ActionType, PrincipalType, AutonomyLevel
-
-    participant = get_participant(session.participant_id)
-    if not participant:
-        raise HTTPException(404, "Participant not found")
-
-    plan = _get_plan(participant.plan_id)
-    if not plan:
-        raise HTTPException(404, "Plan not found")
 
     payload = {
         "new_deferral_pct": body.new_deferral_pct,
@@ -521,26 +436,26 @@ def change_deferral(body: ChangeDeferralRequest, session: SessionToken = Depends
         "catch_up":         body.catch_up,
     }
 
-    result = authorize(
-        agent_id="AGENT-PARTICIPANT-001",
-        principal_type=PrincipalType.participant,
-        participant=participant,
-        plan=plan,
-        action=ActionType.deferral_change,
-        payload=payload,
-    )
+    try:
+        result = paap_execute(
+            participant_id=session.participant_id,
+            agent_id=session.agent_id or "portal",
+            action="deferral_change",
+            payload=payload,
+        )
+    except ParticipantNotFound as e:
+        raise HTTPException(404, str(e))
+    except UnauthorizedByFAP as e:
+        raise HTTPException(400, f"FAP denied: {e.denial_reason}")
 
-    if not result.authorized:
-        raise HTTPException(400, f"FAP denied: {result.denial_reason}")
-
-    # deferral to 0% → supervised (participant must confirm opt-out intent)
-    if result.autonomy_level == AutonomyLevel.supervised:
+    # deferral to 0% → supervised — PAAP did not execute, returns fap_token
+    if result["autonomy_level"] == "supervised" and result.get("fap_token"):
         set_supervised_pending(
             session.participant_id,
             action="deferral_change",
             payload=payload,
             payload_json=json.dumps(payload),
-            fap_token=result.token,
+            fap_token=result["fap_token"],
         )
         return {
             "status":  "requires_confirmation",
@@ -549,48 +464,10 @@ def change_deferral(body: ChangeDeferralRequest, session: SessionToken = Depends
             "warning": "Setting to 0% will stop all retirement contributions. Please confirm.",
         }
 
-    # Full autonomy — execute immediately
-    tool = ExecuteTransactionTool()
-    raw = tool._run(
-        participant_id=session.participant_id,
-        action="deferral_change",
-        payload_json=json.dumps(payload),
-        fap_token=result.token,
-        autonomy_level="full",
-    )
-
-    try:
-        exec_result = json.loads(raw)
-    except Exception:
-        exec_result = {"status": "unknown", "raw": raw}
-
-    if "error" in exec_result:
-        raise HTTPException(400, exec_result["error"])
-
-    # Persist to DB (best-effort — in-memory override already applied by ExecuteTransactionTool)
-    try:
-        from data import db
-        db.update_deferral(
-            participant_id=session.participant_id,
-            new_deferral_pct=body.new_deferral_pct,
-            deferral_type=body.deferral_type,
-        )
-        db.record_transaction(
-            participant_id=session.participant_id,
-            plan_id=participant.plan_id,
-            action="deferral_change",
-            amount=None,
-            payload=payload,
-            fap_token_id=result.token,
-            autonomy_level="full",
-        )
-    except Exception:
-        pass
-
     return {
-        "status":          "executed",
-        "action":          "deferral_change",
+        "status":           "executed",
+        "action":           "deferral_change",
         "new_deferral_pct": body.new_deferral_pct,
-        "deferral_type":   body.deferral_type,
-        "message":         f"Deferral rate updated to {body.new_deferral_pct * 100:.1f}% ({body.deferral_type.replace('_', '-')}).",
+        "deferral_type":    body.deferral_type,
+        "message":          f"Deferral rate updated to {body.new_deferral_pct * 100:.1f}% ({body.deferral_type.replace('_', '-')}).",
     }

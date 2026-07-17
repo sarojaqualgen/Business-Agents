@@ -169,6 +169,19 @@ export const apiClient = {
     return streamChatViaBackend(message, onEvent);
   },
 
+  async chatFast(message, history = []) {
+    const res = await fetch(`${BASE_URL}/chat/fast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
+      body: JSON.stringify({ message, history }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(err?.detail || `Chat failed (${res.status})`, res.status);
+    }
+    return res.json();
+  },
+
   async getPendingTransaction() {
     return request('/transactions/pending', { auth: true });
   },

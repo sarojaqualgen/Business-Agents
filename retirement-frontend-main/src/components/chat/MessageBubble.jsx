@@ -71,7 +71,9 @@ export default function MessageBubble({ message, userInitials }) {
         A
       </div>
       <div className="flex-1 min-w-0 flex flex-col gap-1.5">
-        <AgentTracePanel steps={message.steps} isStreaming={message.isStreaming} intent={message.intent} />
+        {(message.steps?.length > 0 || message.isStreaming) && (
+          <AgentTracePanel steps={message.steps} isStreaming={message.isStreaming} intent={message.intent} />
+        )}
         {!message.isStreaming && message.text && (
           <div
             className={[

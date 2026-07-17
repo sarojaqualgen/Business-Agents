@@ -41,6 +41,69 @@ export function useChatStream() {
   const clearChat = useCallback(() => dispatch({ type: 'RESET' }), [dispatch]);
   const dismissUpload = useCallback(() => setPendingUpload(null), []);
 
+  // Fast path — Haiku classification + direct PAAP/PLAP calls, no CrewAI.
+  // Builds history from the current transcript so Haiku has multi-turn context.
+  const sendFastMessage = useCallback(
+    async (rawText) => {
+      const text = (rawText || '').trim();
+      if (!text || isStreaming) return;
+
+      dispatch({ type: 'ADD_USER_MESSAGE', payload: { id: nextId('user'), text } });
+
+      const assistantId = nextId('assistant');
+      dispatch({ type: 'ADD_ASSISTANT_PLACEHOLDER', payload: { id: assistantId } });
+      setIsStreaming(true);
+
+      // Build history for Haiku context (last 6 messages, user + assistant only)
+      const history = state.messages
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .slice(-6)
+        .map((m) => ({ role: m.role, content: m.text || '' }));
+
+      try {
+        const res = await apiClient.chatFast(text, history);
+        dispatch({
+          type: 'COMPLETE_ASSISTANT_MESSAGE',
+          payload: {
+            id:          assistantId,
+            text:        res.reply || '',
+            autonomy:    res.autonomy || null,
+            transaction: null,   // fast path never uses TransactionSummaryCard
+            intent:      res.intent || null,
+            isError:     false,
+          },
+        });
+        if (res.autonomy === 'supervised' && res.transaction) {
+          const tx = res.transaction;
+          dispatch({
+            type: 'SET_PENDING_TRANSACTION',
+            payload: {
+              type:     tx.action,
+              amount:   tx.amount,
+              termYears: tx.repayment_years,
+              purpose:  tx.purpose,
+              status:   'pending_confirmation',
+            },
+          });
+        }
+      } catch (err) {
+        dispatch({
+          type: 'COMPLETE_ASSISTANT_MESSAGE',
+          payload: {
+            id:          assistantId,
+            text:        err.message || 'Something went wrong. Please try again.',
+            autonomy:    null,
+            transaction: null,
+            isError:     true,
+          },
+        });
+      } finally {
+        setIsStreaming(false);
+      }
+    },
+    [dispatch, isStreaming, state.messages],
+  );
+
   const sendMessage = useCallback(
     async (rawText) => {
       const text = (rawText || '').trim();
@@ -217,6 +280,7 @@ export function useChatStream() {
     isStreaming,
     isResolving,
     sendMessage,
+    sendFastMessage,
     confirmTransaction,
     cancelTransaction,
     clearChat,
