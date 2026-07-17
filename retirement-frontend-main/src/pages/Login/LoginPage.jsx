@@ -246,15 +246,15 @@ export default function LoginPage() {
               <QualGenLogo height={30} iconOnly={true} />
               <span style={{
                 fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
-                fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em',
+                fontSize: 22, fontWeight: 800, letterSpacing: '-0.03em',
                 lineHeight: 1,
+                color: '#fff',
               }}>
-                <span style={{ color: '#fff' }}>QualGen</span>
-                <span style={{ color: '#9333EA' }}>.ai</span>
+                QRetire
               </span>
             </div>
-            <div style={{ color: '#F97316', fontSize: 12, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.09em', paddingLeft: 3}}>
-              RETIREMENT PLATFORM
+            <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 11, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.06em', paddingLeft: 3}}>
+              Powered by Qualgen.ai
             </div>
           </div>
 
@@ -324,7 +324,7 @@ export default function LoginPage() {
             opacity: heroIn ? 1 : 0,
             animation: heroIn ? 'hero-in 0.4s ease-out 0.52s both' : 'none',
           }}>
-            qualgen.ai · Demo environment · No real data
+            QRetire · Powered by Qualgen.ai · Demo environment · No real data
           </div>
         </div>
 

@@ -348,6 +348,20 @@ def get_participant(participant_id: str) -> Optional[ParticipantRecord]:
         )
 
 
+def get_participant_name(participant_id: str) -> str:
+    """Return 'First Last' for document name-match verification. Returns '' if not found."""
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT first_name, last_name FROM participants WHERE participant_id = %s",
+            (participant_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return ""
+        return f"{row['first_name']} {row['last_name']}"
+
+
 # ---------------------------------------------------------------------------
 # FAP token operations
 # ---------------------------------------------------------------------------

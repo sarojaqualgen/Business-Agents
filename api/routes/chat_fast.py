@@ -26,8 +26,8 @@ from agents.paap.agent import (
     execute as paap_execute,
     get_participant_plan_id,
 )
-from crew.tools.paap_tools import set_supervised_pending
-from crew.context.fap_rules import FAP_RULES_TEXT
+from api.pending import set_supervised_pending
+from agents.fap.context import FAP_RULES_TEXT
 
 router = APIRouter()
 _client = anthropic.Anthropic()
@@ -41,10 +41,27 @@ _CLASSIFY_SYSTEM = """You are a 401k plan assistant intent classifier.
 A single user message can contain MULTIPLE things at once — a question AND a transaction request.
 Extract ALL of them. Return ONLY valid JSON — no explanation, no markdown.
 
-Supported transaction intents: loan_initiation
-  Required params: amount (dollars), repayment_years (integer), purpose ("general" or "primary_residence")
+Supported transaction intents: loan_initiation, hardship_distribution
+
+  loan_initiation required params: amount (dollars), repayment_years (integer), purpose ("general" or "primary_residence")
   IMPORTANT: Extract whatever number the user gives for repayment_years — do NOT validate it. Even if
   they say "6 years" or "10 years", extract it. Compliance rules run separately and will reject if invalid.
+
+  hardship_distribution required params: amount (dollars), qualifying_expense_type (string — the user's stated reason)
+  Classify ANY request where someone wants money from their 401k for a personal financial reason as hardship_distribution,
+  even if the reason is not a valid IRS category (e.g. "vacation", "car repairs", "credit card debt"). Extract the
+  qualifying_expense_type as whatever the user says — do NOT validate it. Compliance rules run separately and will
+  reject invalid categories.
+  Map common user language to IRS standard terms where applicable:
+    "medical bills/expenses/hospital" → "medical"
+    "rent/eviction" → "prevent_eviction"
+    "school/college/tuition" → "tuition"
+    "funeral/burial" → "funeral"
+    "buy a home/house/primary residence" → "primary_home_purchase"
+    "disaster/FEMA/hurricane/flood" → "FEMA_disaster"
+    "property damage/casualty loss" → "casualty_loss"
+  If the user's reason doesn't match any of the above, pass it through as-is (e.g. "vacation", "car_repairs").
+
   In multi-turn conversations, carry over params already collected from history into the current params.
 
 data_question_type options:
@@ -88,6 +105,14 @@ Examples:
   → transaction.intent=null, data_question_type=null, conceptual_topic="vesting"
 - "I want a loan"
   → transaction.intent=loan_initiation, missing=[amount,repayment_years,purpose]
+- "I need $3000 for medical bills"
+  → transaction.intent=hardship_distribution, params={{amount:3000,qualifying_expense_type:medical}}, missing=[]
+- "I need a hardship withdrawal"
+  → transaction.intent=hardship_distribution, params={{}}, missing=[amount,qualifying_expense_type]
+- "I need $3000 for a vacation"
+  → transaction.intent=hardship_distribution, params={{amount:3000,qualifying_expense_type:vacation}}, missing=[]
+- "I need $1000 for car repairs"
+  → transaction.intent=hardship_distribution, params={{amount:1000,qualifying_expense_type:car_repairs}}, missing=[]
 """
 
 
@@ -285,6 +310,79 @@ def chat_fast(req: ChatFastRequest, session: SessionToken = Depends(get_session)
                     "repayment_years": int(years),
                     "purpose":         purpose,
                 }
+
+    # ── Hardship distribution ─────────────────────────────────────────────
+    if tx_intent == "hardship_distribution":
+        if tx_missing:
+            first = tx_missing[0]
+            if first == "amount":
+                reply_parts.append("How much do you need for the hardship distribution?")
+            elif first == "qualifying_expense_type":
+                reply_parts.append(
+                    "What is the reason for your hardship? Options: medical expenses, "
+                    "tuition, home purchase, eviction prevention, funeral costs, "
+                    "casualty loss, or FEMA disaster."
+                )
+        else:
+            try:
+                result = paap_execute(
+                    participant_id=participant_id,
+                    agent_id=session.agent_id or "portal",
+                    action="hardship_distribution",
+                    payload=tx_params,
+                )
+            except UnauthorizedByFAP as e:
+                denial_reply = _haiku_reply(
+                    system_extra=(
+                        f"FAP denied a hardship distribution request.\n"
+                        f"Denial reason: {e.denial_reason}\n"
+                        f"Denial code: {e.denial_code}"
+                    ),
+                    instruction="Explain in 2-3 sentences why the hardship was denied and what the participant can do.",
+                )
+                reply_parts.append(denial_reply)
+                result = None
+            except Exception as e:
+                reply_parts.append(f"Unable to process your hardship request right now: {e}")
+                result = None
+
+            if result is not None:
+                autonomy = result["autonomy_level"]  # always human_review for hardship
+                fap_token = result.get("fap_token")
+
+                if autonomy == "human_review" and fap_token:
+                    import datetime
+                    from data.review_queue import enqueue
+                    entry_id = enqueue(
+                        participant_id=participant_id,
+                        plan_id=result["plan_id"],
+                        agent_id=session.agent_id or "portal",
+                        principal_type="participant",
+                        action="hardship_distribution",
+                        payload=tx_params,
+                        fap_audit_id=result.get("fap_audit_id") or "",
+                        fap_token=fap_token,
+                        created_at=datetime.datetime.utcnow().isoformat() + "Z",
+                    )
+                    amount      = tx_params.get("amount", 0)
+                    expense     = tx_params.get("qualifying_expense_type", "")
+                    hardship_reply = _haiku_reply(
+                        system_extra="",
+                        instruction=(
+                            f"A hardship distribution of ${float(amount):,.0f} for '{expense}' "
+                            f"passed compliance checks and is now queued for plan sponsor review. "
+                            f"Tell the participant: (1) it needs sponsor approval, (2) they must "
+                            f"upload supporting documents (e.g. medical bill, eviction notice), "
+                            f"(3) they'll be notified when approved. 3 sentences, plain English."
+                        ),
+                    )
+                    reply_parts.append(hardship_reply)
+                    transaction = {
+                        "action":                  "hardship_distribution",
+                        "amount":                  float(amount),
+                        "qualifying_expense_type": expense,
+                        "entry_id":                entry_id,
+                    }
 
     # ── Nothing matched ───────────────────────────────────────────────────
     if not reply_parts:

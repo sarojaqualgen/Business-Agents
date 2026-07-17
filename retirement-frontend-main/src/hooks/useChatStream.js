@@ -86,6 +86,17 @@ export function useChatStream() {
             },
           });
         }
+        if (res.autonomy === 'human_review' && res.transaction) {
+          const tx = res.transaction;
+          const actionType = tx.action || tx.type || '';
+          if (UPLOAD_REQUIRED_TYPES.has(actionType)) {
+            setPendingUpload({
+              entryId:     tx.entry_id ?? tx.entryId ?? null,
+              actionType,
+              expenseType: tx.qualifying_expense_type || tx.expense_type || null,
+            });
+          }
+        }
       } catch (err) {
         dispatch({
           type: 'COMPLETE_ASSISTANT_MESSAGE',

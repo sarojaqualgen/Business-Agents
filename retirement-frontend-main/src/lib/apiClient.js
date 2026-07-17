@@ -259,6 +259,30 @@ export const apiClient = {
 
     return { content: finalContent };
   },
+
+  // Fast document upload — calls /documents/upload-fast which runs Haiku verification
+  // directly (no CrewAI, no SSE). Returns structured JSON.
+  async uploadDocumentFast({ queueEntryId, actionType, expenseType, docType, file }) {
+    const fd = new FormData();
+    fd.append('queue_entry_id', String(queueEntryId));
+    fd.append('action_type', actionType);
+    fd.append('expense_type', expenseType || '');
+    fd.append('doc_type', docType);
+    fd.append('file', file);
+
+    const response = await fetch(`${BASE_URL}/documents/upload-fast`, {
+      method: 'POST',
+      headers: { ...authHeader() },  // no Content-Type — browser sets multipart boundary
+      body: fd,
+    });
+
+    let data = null;
+    try { data = await response.json(); } catch { data = null; }
+    if (!response.ok) {
+      throw new ApiError(data?.detail || `Upload failed: ${response.status}`, response.status);
+    }
+    return data;
+  },
 };
 
 export { ApiError };

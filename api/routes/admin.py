@@ -73,7 +73,7 @@ def reset_demo(session: SessionToken = Depends(get_session)):
     report["review_queue_memory"] = "cleared"
 
     # 3 — supervised-pending, disbursement-pending, and in-memory consumed tokens
-    from crew.tools.paap_tools import _supervised_pending
+    from api.pending import _supervised_pending
     _supervised_pending.clear()
     from api.routes.transactions import _disbursement_pending
     _disbursement_pending.clear()

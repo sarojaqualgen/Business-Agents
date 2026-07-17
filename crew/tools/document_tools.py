@@ -17,83 +17,9 @@ from crewai.tools import BaseTool
 
 from data import document_store
 
-
-# ---------------------------------------------------------------------------
-# Standalone document verification — uses Anthropic SDK directly
-# ---------------------------------------------------------------------------
-
-def verify_document(
-    doc_type: str,
-    expense_type: str,
-    action_type: str,
-    content_text: str,
-    participant_name: str = "",
-) -> dict:
-    """
-    Call Claude Haiku to verify the uploaded document.
-    Checks: correct type, key fields present, appears legitimate,
-    and — when participant_name is supplied — that the name on the
-    document matches the participant (not someone else's document).
-    Returns {verified, note, key_details, name_match}.
-    """
-    try:
-        import anthropic
-        client = anthropic.Anthropic()
-
-        action_label = action_type.replace("_", " ")
-        doc_label = document_store.DOC_TYPE_LABELS.get(doc_type, doc_type)
-
-        name_instruction = (
-            f"4. The document must belong to the participant named '{participant_name}'. "
-            f"If a patient name, account holder name, or recipient name is visible on the document "
-            f"and it does NOT match '{participant_name}', set verified=false and explain the mismatch. "
-            f"A document addressed to someone else is not acceptable — this protects against a participant "
-            f"uploading another person's records.\n"
-            if participant_name
-            else "4. No participant name was supplied — skip the name check.\n"
-        )
-
-        prompt = (
-            f"You are a document verification agent for an ERISA 401(k) plan administrator.\n\n"
-            f"A participant has submitted a document claiming it is a '{doc_label}' "
-            f"in support of a '{action_label}' request (expense category: {expense_type}).\n\n"
-            f"Document content:\n"
-            f"──────────────────\n"
-            f"{content_text[:2000]}\n"
-            f"──────────────────\n\n"
-            f"Evaluate whether this document:\n"
-            f"1. Is the correct document type for the claimed expense\n"
-            f"2. Contains the key information expected (amounts, dates, provider/institution)\n"
-            f"3. Appears to be a legitimate document (not obviously fabricated)\n"
-            f"{name_instruction}\n"
-            f"Respond in JSON only:\n"
-            f'{{"verified": true/false, "note": "one sentence reason", '
-            f'"key_details": "amount, date, provider extracted from the doc", '
-            f'"name_on_document": "name found on the document or empty string if none visible", '
-            f'"name_match": true/false}}'
-        )
-
-        message = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=300,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        raw = message.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        return json.loads(raw.strip())
-
-    except Exception as exc:
-        return {
-            "verified": False,
-            "note": f"Verification service unavailable: {str(exc)[:80]}",
-            "key_details": "",
-            "name_on_document": "",
-            "name_match": False,
-        }
+# verify_document lives in api.helpers — re-exported here so existing
+# CrewAI code (UploadDocumentTool._run) keeps working without changes.
+from api.helpers.verify_document import verify_document  # noqa: F401
 
 
 # ---------------------------------------------------------------------------

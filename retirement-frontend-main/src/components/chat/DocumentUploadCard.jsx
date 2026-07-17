@@ -116,7 +116,7 @@ export default function DocumentUploadCard({ entryId, actionType, expenseType: i
     setStatus('uploading');
     setErrorMsg('');
     try {
-      const res = await apiClient.uploadDocument({
+      const res = await apiClient.uploadDocumentFast({
         queueEntryId: entryId,
         actionType,
         expenseType,
@@ -135,23 +135,46 @@ export default function DocumentUploadCard({ entryId, actionType, expenseType: i
 
   // ── Success state ──────────────────────────────────────────────────────────
   if (status === 'success') {
+    const verified = result?.verified ?? false;
+    const borderColor = verified ? 'border-success/30' : 'border-warning/30';
+    const bgColor     = verified ? 'bg-success/5'       : 'bg-warning/5';
+    const iconColor   = verified ? 'fill-success'       : 'fill-warning';
+    const iconBg      = verified ? 'bg-success/15'      : 'bg-warning/15';
     return (
-      <div className="mt-2 ml-11 border border-success/30 bg-success/5 rounded-xl p-4 msg-enter">
+      <div className={`mt-2 ml-11 border ${borderColor} ${bgColor} rounded-xl p-4 msg-enter`}>
         <div className="flex items-start gap-3">
-          <div className="w-8 h-8 rounded-full bg-success/15 flex items-center justify-center flex-shrink-0 mt-0.5">
-            <svg viewBox="0 0 20 20" className="w-4 h-4 fill-success">
-              <path fillRule="evenodd" d="M16.7 5.3a1 1 0 0 1 0 1.4l-7 7a1 1 0 0 1-1.4 0l-3-3a1 1 0 1 1 1.4-1.4L9 11.59l6.3-6.3a1 1 0 0 1 1.4 0z" clipRule="evenodd"/>
-            </svg>
+          <div className={`w-8 h-8 rounded-full ${iconBg} flex items-center justify-center flex-shrink-0 mt-0.5`}>
+            {verified ? (
+              <svg viewBox="0 0 20 20" className={`w-4 h-4 ${iconColor}`}>
+                <path fillRule="evenodd" d="M16.7 5.3a1 1 0 0 1 0 1.4l-7 7a1 1 0 0 1-1.4 0l-3-3a1 1 0 1 1 1.4-1.4L9 11.59l6.3-6.3a1 1 0 0 1 1.4 0z" clipRule="evenodd"/>
+              </svg>
+            ) : (
+              <svg viewBox="0 0 16 16" className={`w-4 h-4 ${iconColor}`}>
+                <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm.75 4v4.5h-1.5V5h1.5zm0 6v1.5h-1.5V11h1.5z"/>
+              </svg>
+            )}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <span className="text-sm font-semibold text-text">Document uploaded</span>
+              <VerifiedBadge verified={verified} />
             </div>
-            {result?.content ? (
-              <p className="text-xs text-text-muted leading-relaxed whitespace-pre-wrap">
-                {result.content}
+            {result?.verification_note && (
+              <p className="text-xs text-text-muted leading-relaxed mb-1">
+                {result.verification_note}
               </p>
-            ) : (
+            )}
+            {result?.key_details && (
+              <p className="text-xs text-text-faint">
+                <span className="font-medium">Details:</span> {result.key_details}
+              </p>
+            )}
+            {!result?.verified && result?.name_on_document && !result?.name_match && (
+              <p className="text-xs text-danger mt-1">
+                Name on document ("{result.name_on_document}") does not match your account name.
+              </p>
+            )}
+            {!result?.verification_note && (
               <p className="text-xs text-text-faint">
                 Your document has been saved and is on file for sponsor review.
               </p>

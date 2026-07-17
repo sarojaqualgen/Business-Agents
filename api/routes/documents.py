@@ -1,11 +1,15 @@
 """
-POST /documents/upload — participant uploads a supporting document.
+Document upload routes.
+
+POST /documents/upload       — streams SSE via CrewAI crew (legacy path)
+POST /documents/upload-fast  — direct Haiku verification, returns JSON (fast chat path)
+POST /documents/participant  — list participant's own documents
 
 Accepts: .txt  .pdf  .docx
-Extracts text → passes to Document Verification Agent → streams SSE result.
 """
 
 import io
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -14,6 +18,8 @@ from fastapi.responses import StreamingResponse
 from api.auth import SessionToken, get_session
 from api.streaming import stream_crew
 from crew.crews.participant_crew import build_document_verification_crew
+from api.helpers.verify_document import verify_document
+from data import document_store
 
 router = APIRouter()
 
@@ -219,3 +225,92 @@ async def upload_document(
             "Connection":       "keep-alive",
         },
     )
+
+
+@router.post(
+    "/upload-fast",
+    summary="Upload and verify a supporting document (fast path — JSON response, no SSE)",
+)
+async def upload_document_fast(
+    queue_entry_id: str = Form(...),
+    action_type: str   = Form(...),
+    expense_type: str  = Form(...),
+    doc_type: str      = Form(...),
+    file: UploadFile   = File(...),
+    session: SessionToken = Depends(get_session),
+):
+    """
+    Same as /upload but calls verify_document() directly (Haiku, no CrewAI).
+    Returns plain JSON — used by the fast chat portal UI.
+    """
+    if session.principal_type not in ("participant", "participant_delegate", "investment_advisor"):
+        raise HTTPException(403, "Only participants can upload documents")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "Uploaded file is empty")
+
+    text = _extract_text(file.filename or "document.txt", content)
+    if not text.strip():
+        raise HTTPException(400, "Could not extract any text from the document")
+
+    # Optional MinIO upload — ignore if not configured
+    object_key = ""
+    try:
+        from data import minio_client  # noqa: PLC0415
+        object_key = minio_client.upload_document(
+            participant_id=session.participant_id or "unknown",
+            filename=file.filename or f"{doc_type}.bin",
+            content=content,
+            content_type=file.content_type or "application/octet-stream",
+        )
+    except Exception:
+        pass
+
+    # Look up participant name for name-match check
+    participant_name = ""
+    try:
+        from data.db import get_participant_name  # noqa: PLC0415
+        participant_name = get_participant_name(session.participant_id or "")
+    except Exception:
+        pass
+
+    # LLM verification — direct Haiku call, no CrewAI
+    verification = verify_document(
+        doc_type=doc_type,
+        expense_type=expense_type,
+        action_type=action_type,
+        content_text=text,
+        participant_name=participant_name,
+    )
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    doc_id = document_store.upload(
+        participant_id=session.participant_id or "",
+        plan_id=session.plan_id or "",
+        queue_entry_id=queue_entry_id,
+        action_type=action_type,
+        expense_type=expense_type,
+        doc_type=doc_type,
+        filename=file.filename or f"{doc_type}.txt",
+        content_preview=text[:500],
+        object_key=object_key,
+        uploaded_at=now,
+    )
+    document_store.mark_verified(
+        doc_id=doc_id,
+        verified=verification.get("verified", False),
+        note=verification.get("note", ""),
+        verified_at=now,
+    )
+
+    return {
+        "doc_id":              doc_id,
+        "filename":            file.filename or f"{doc_type}.txt",
+        "queue_entry_id":      queue_entry_id,
+        "verified":            verification.get("verified", False),
+        "verification_note":   verification.get("note", ""),
+        "key_details":         verification.get("key_details", ""),
+        "name_on_document":    verification.get("name_on_document", ""),
+        "name_match":          verification.get("name_match", False),
+    }

@@ -254,6 +254,7 @@ def execute(
         "autonomy_level": autonomy_level,
         "executed":       executed,
         "fap_token":      fap_result.token if (fap_result is not None and not executed) else None,
+        "fap_audit_id":   fap_result.audit_id if fap_result is not None else None,
         "message": (
             "Transaction executed successfully."
             if executed
@@ -355,5 +356,17 @@ def _execute_write(participant_id: str, plan_id: str, action: str, payload: dict
             autonomy_level="supervised",
         )
 
-    # hardship_distribution, separation_distribution, beneficiary_update, qdro
-    # go to human_review — sponsor approves, then execute_confirmed() is called here.
+    elif action == "hardship_distribution":
+        amount = Decimal(str(payload.get("amount", 0)))
+        db.decrement_vested_balance(participant_id=participant_id, amount=amount)
+        db.record_transaction(
+            participant_id=participant_id,
+            plan_id=plan_id,
+            action=action,
+            amount=amount,
+            payload=payload,
+            autonomy_level="human_review",
+        )
+
+    # separation_distribution, beneficiary_update, qdro — handled similarly
+    # when those are implemented; sponsor approves, execute_confirmed() is called here.

@@ -100,7 +100,7 @@ async def stream_crew(
             # Clear any supervised_pending left from a prior chat turn so stale
             # loan data never bleeds into an unrelated response (e.g. hardship).
             if participant_id:
-                from crew.tools.paap_tools import clear_supervised_pending as _csp
+                from api.pending import clear_supervised_pending as _csp
                 _csp(participant_id)
 
             # Snapshot queue so we can detect NEW entries added this turn.
@@ -127,7 +127,7 @@ async def stream_crew(
 
             if participant_id:
                 # 1. Supervised — a new supervised_pending was created this turn
-                from crew.tools.paap_tools import get_supervised_pending
+                from api.pending import get_supervised_pending
                 pending = get_supervised_pending(participant_id)
                 if pending:
                     response_event["autonomy"] = "supervised"

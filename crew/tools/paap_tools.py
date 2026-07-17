@@ -16,35 +16,13 @@ from crewai.tools import BaseTool
 from data.participants import get_participant
 from crew.tool_logger import record
 
-# Supervised transactions are stored here until the participant confirms via CLI.
-# Key: participant_id  Value: {action, payload, payload_json, fap_token}
-_supervised_pending: dict[str, dict] = {}
-
-
-def get_supervised_pending(participant_id: str) -> dict | None:
-    """Return the pending supervised transaction for this participant, or None."""
-    return _supervised_pending.get(participant_id)
-
-
-def clear_supervised_pending(participant_id: str) -> None:
-    """Remove the pending supervised transaction (confirmed or cancelled)."""
-    _supervised_pending.pop(participant_id, None)
-
-
-def set_supervised_pending(
-    participant_id: str,
-    action: str,
-    payload: dict,
-    payload_json: str,
-    fap_token: str,
-) -> None:
-    """Store a supervised transaction for portal-initiated flows."""
-    _supervised_pending[participant_id] = {
-        "action":       action,
-        "payload":      payload,
-        "payload_json": payload_json,
-        "fap_token":    fap_token,
-    }
+# Re-exported from api.pending so the CrewAI CLI path keeps working.
+from api.pending import (  # noqa: E402
+    _supervised_pending,
+    get_supervised_pending,
+    set_supervised_pending,
+    clear_supervised_pending,
+)
 
 
 class GetParticipantSummaryInput(BaseModel):

@@ -32,8 +32,7 @@ from agents.paap.agent import (
     PlanDoesNotSupportAction,
     UnauthorizedByFAP,
 )
-from crew.tools.paap_tools import (
-    ExecuteTransactionTool,
+from api.pending import (
     clear_supervised_pending,
     get_supervised_pending,
     set_supervised_pending,
