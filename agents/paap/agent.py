@@ -226,6 +226,19 @@ def execute(
         if plan is None:
             raise PlanNotFound(f"Plan '{plan_id}' not found.")
 
+        # Enrich QDRO payload — FAP requires structured fields the UI doesn't collect directly.
+        if action == "qdro":
+            payload = dict(payload)
+            if not payload.get("participant_name"):
+                from data.db import get_participant_name as _gpn
+                payload["participant_name"] = _gpn(participant_id) or participant_id
+            if not payload.get("plan_name"):
+                payload["plan_name"] = getattr(plan, "plan_name", plan_id)
+            if not payload.get("benefit_amount_or_pct"):
+                payload["benefit_amount_or_pct"] = f"{payload.get('transfer_pct', 50)}%"
+            if not payload.get("payment_period"):
+                payload["payment_period"] = "lump_sum"
+
         fap_result = authorize(
             agent_id=agent_id,
             principal_type=PrincipalType.participant,
