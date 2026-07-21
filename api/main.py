@@ -8,7 +8,7 @@ Run:
 Endpoints:
   POST /auth/login                    — get session JWT (participant or plan_sponsor)
 
-  POST /chat                          — send message to CrewAI crew, stream SSE events (participant)
+  POST /chat/fast                     — fast chat (Haiku classification + direct PAAP/PLAP, JSON response)
 
   GET  /meta/participants             — list demo participants, no auth required
   GET  /meta/plans                    — list demo plans, no auth required

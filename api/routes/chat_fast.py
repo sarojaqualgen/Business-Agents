@@ -41,7 +41,9 @@ _CLASSIFY_SYSTEM = """You are a 401k plan assistant intent classifier.
 A single user message can contain MULTIPLE things at once — a question AND a transaction request.
 Extract ALL of them. Return ONLY valid JSON — no explanation, no markdown.
 
-Supported transaction intents: loan_initiation, hardship_distribution
+Supported transaction intents:
+  loan_initiation, hardship_distribution, in_service_distribution,
+  separation_distribution, rmd, qdro, beneficiary_update
 
   loan_initiation required params: amount (dollars), repayment_years (integer), purpose ("general" or "primary_residence")
   IMPORTANT: Extract whatever number the user gives for repayment_years — do NOT validate it. Even if
@@ -61,6 +63,27 @@ Supported transaction intents: loan_initiation, hardship_distribution
     "disaster/FEMA/hurricane/flood" → "FEMA_disaster"
     "property damage/casualty loss" → "casualty_loss"
   If the user's reason doesn't match any of the above, pass it through as-is (e.g. "vacation", "car_repairs").
+
+  in_service_distribution required params: amount (dollars)
+  For participants still employed, age 59½ or older. Map: "in-service withdrawal", "take money while still working",
+  "withdraw at 59½", "active employee withdrawal" → in_service_distribution.
+
+  separation_distribution required params: amount (dollars)
+  For participants who have left employment (terminated, retired). Map: "I quit/left my job and want my money",
+  "separation distribution", "termination distribution", "retire and take my money" → separation_distribution.
+
+  rmd required params: none (amount is prescribed by the plan)
+  Map: "RMD", "required minimum distribution", "take my required distribution", "I have to take money out this year",
+  "mandatory withdrawal" → rmd.
+
+  qdro required params: alternate_payee_name (string), transfer_pct (integer 1-100)
+  Map: "QDRO", "qualified domestic relations order", "divorce settlement transfer", "transfer to ex-spouse",
+  "court-ordered transfer", "divorce decree" → qdro.
+
+  beneficiary_update required params: beneficiary_name (string), relationship (one of: "spouse", "child", "parent", "sibling", "estate", "other")
+  Optional: allocation_pct (integer, defaults to 100 if single beneficiary)
+  Map: "change beneficiary", "update beneficiary", "add beneficiary", "remove beneficiary",
+  "who gets my money", "designate beneficiary" → beneficiary_update.
 
   In multi-turn conversations, carry over params already collected from history into the current params.
 
@@ -88,7 +111,7 @@ User's latest message: "{message}"
 Return JSON exactly like this (all fields required, use null if not present):
 {{
   "transaction": {{
-    "intent": "loan_initiation" | null,
+    "intent": "loan_initiation" | "hardship_distribution" | "in_service_distribution" | "separation_distribution" | "rmd" | "qdro" | "beneficiary_update" | null,
     "params": {{}},
     "missing": []
   }},
@@ -113,6 +136,16 @@ Examples:
   → transaction.intent=hardship_distribution, params={{amount:3000,qualifying_expense_type:vacation}}, missing=[]
 - "I need $1000 for car repairs"
   → transaction.intent=hardship_distribution, params={{amount:1000,qualifying_expense_type:car_repairs}}, missing=[]
+- "I want to take $5000 out, I'm 60 and still working"
+  → transaction.intent=in_service_distribution, params={{amount:5000}}, missing=[]
+- "I left my job, I want to take $20000 out"
+  → transaction.intent=separation_distribution, params={{amount:20000}}, missing=[]
+- "I need to take my RMD this year"
+  → transaction.intent=rmd, params={{}}, missing=[]
+- "I need to set up a QDRO, 50% to my ex-wife Jane Smith"
+  → transaction.intent=qdro, params={{alternate_payee_name:"Jane Smith",transfer_pct:50}}, missing=[]
+- "Change my beneficiary to my daughter Maria, she's my child"
+  → transaction.intent=beneficiary_update, params={{beneficiary_name:"Maria",relationship:"child"}}, missing=[]
 """
 
 
@@ -382,6 +415,288 @@ def chat_fast(req: ChatFastRequest, session: SessionToken = Depends(get_session)
                         "amount":                  float(amount),
                         "qualifying_expense_type": expense,
                         "entry_id":                entry_id,
+                    }
+
+    # ── In-service distribution ───────────────────────────────────────────
+    if tx_intent == "in_service_distribution":
+        if tx_missing:
+            reply_parts.append("How much would you like to withdraw from your account?")
+        else:
+            try:
+                result = paap_execute(
+                    participant_id=participant_id,
+                    agent_id=session.agent_id or "portal",
+                    action="in_service_distribution",
+                    payload=tx_params,
+                )
+            except UnauthorizedByFAP as e:
+                reply_parts.append(_haiku_reply(
+                    system_extra=(
+                        f"FAP denied an in-service distribution request.\n"
+                        f"Denial reason: {e.denial_reason}\nDenial code: {e.denial_code}"
+                    ),
+                    instruction="Explain in 2-3 sentences why the in-service withdrawal was denied and what the participant can do.",
+                ))
+                result = None
+            except Exception as e:
+                reply_parts.append(f"Unable to process your request right now: {e}")
+                result = None
+
+            if result is not None:
+                autonomy = result["autonomy_level"]
+                fap_token = result.get("fap_token")
+                if autonomy == "human_review" and fap_token:
+                    import datetime
+                    from data.review_queue import enqueue
+                    entry_id = enqueue(
+                        participant_id=participant_id,
+                        plan_id=result["plan_id"],
+                        agent_id=session.agent_id or "portal",
+                        principal_type="participant",
+                        action="in_service_distribution",
+                        payload=tx_params,
+                        fap_audit_id=result.get("fap_audit_id") or "",
+                        fap_token=fap_token,
+                        created_at=datetime.datetime.utcnow().isoformat() + "Z",
+                    )
+                    amount = tx_params.get("amount", 0)
+                    reply_parts.append(_haiku_reply(
+                        system_extra="",
+                        instruction=(
+                            f"An in-service distribution of ${float(amount):,.0f} passed compliance checks "
+                            f"and is queued for plan sponsor review. Tell the participant: (1) it needs sponsor "
+                            f"approval, (2) they'll be notified when approved. 2 sentences, plain English."
+                        ),
+                    ))
+                    transaction = {"action": "in_service_distribution", "amount": float(amount), "entry_id": entry_id}
+
+    # ── Separation distribution ───────────────────────────────────────────
+    if tx_intent == "separation_distribution":
+        if tx_missing:
+            reply_parts.append("How much would you like to withdraw from your account?")
+        else:
+            try:
+                result = paap_execute(
+                    participant_id=participant_id,
+                    agent_id=session.agent_id or "portal",
+                    action="separation_distribution",
+                    payload=tx_params,
+                )
+            except UnauthorizedByFAP as e:
+                reply_parts.append(_haiku_reply(
+                    system_extra=(
+                        f"FAP denied a separation distribution request.\n"
+                        f"Denial reason: {e.denial_reason}\nDenial code: {e.denial_code}"
+                    ),
+                    instruction="Explain in 2-3 sentences why the separation distribution was denied and what the participant can do.",
+                ))
+                result = None
+            except Exception as e:
+                reply_parts.append(f"Unable to process your request right now: {e}")
+                result = None
+
+            if result is not None:
+                autonomy = result["autonomy_level"]
+                fap_token = result.get("fap_token")
+                if autonomy == "human_review" and fap_token:
+                    import datetime
+                    from data.review_queue import enqueue
+                    entry_id = enqueue(
+                        participant_id=participant_id,
+                        plan_id=result["plan_id"],
+                        agent_id=session.agent_id or "portal",
+                        principal_type="participant",
+                        action="separation_distribution",
+                        payload=tx_params,
+                        fap_audit_id=result.get("fap_audit_id") or "",
+                        fap_token=fap_token,
+                        created_at=datetime.datetime.utcnow().isoformat() + "Z",
+                    )
+                    amount = tx_params.get("amount", 0)
+                    reply_parts.append(_haiku_reply(
+                        system_extra="",
+                        instruction=(
+                            f"A separation distribution of ${float(amount):,.0f} passed compliance checks "
+                            f"and is queued for plan sponsor review. Tell the participant it needs sponsor "
+                            f"approval and they'll be notified when approved. 2 sentences."
+                        ),
+                    ))
+                    transaction = {"action": "separation_distribution", "amount": float(amount), "entry_id": entry_id}
+
+    # ── RMD ───────────────────────────────────────────────────────────────
+    if tx_intent == "rmd":
+        try:
+            result = paap_execute(
+                participant_id=participant_id,
+                agent_id=session.agent_id or "portal",
+                action="rmd",
+                payload=tx_params,
+            )
+        except UnauthorizedByFAP as e:
+            reply_parts.append(_haiku_reply(
+                system_extra=(
+                    f"FAP denied an RMD request.\n"
+                    f"Denial reason: {e.denial_reason}\nDenial code: {e.denial_code}"
+                ),
+                instruction="Explain in 2-3 sentences why the RMD request was denied and what the participant can do.",
+            ))
+            result = None
+        except Exception as e:
+            reply_parts.append(f"Unable to process your RMD request right now: {e}")
+            result = None
+
+        if result is not None:
+            autonomy = result["autonomy_level"]
+            fap_token = result.get("fap_token")
+            if autonomy == "human_review" and fap_token:
+                import datetime
+                from data.review_queue import enqueue
+                entry_id = enqueue(
+                    participant_id=participant_id,
+                    plan_id=result["plan_id"],
+                    agent_id=session.agent_id or "portal",
+                    principal_type="participant",
+                    action="rmd",
+                    payload=tx_params,
+                    fap_audit_id=result.get("fap_audit_id") or "",
+                    fap_token=fap_token,
+                    created_at=datetime.datetime.utcnow().isoformat() + "Z",
+                )
+                reply_parts.append(_haiku_reply(
+                    system_extra="",
+                    instruction=(
+                        "An RMD (Required Minimum Distribution) request passed compliance checks and is queued "
+                        "for plan sponsor review. Tell the participant it needs sponsor approval and they'll be "
+                        "notified when processed. 2 sentences."
+                    ),
+                ))
+                transaction = {"action": "rmd", "entry_id": entry_id}
+
+    # ── QDRO ──────────────────────────────────────────────────────────────
+    if tx_intent == "qdro":
+        if tx_missing:
+            first = tx_missing[0]
+            if first == "alternate_payee_name":
+                reply_parts.append("What is the full name of the alternate payee (the person receiving the transfer)?")
+            elif first == "transfer_pct":
+                reply_parts.append("What percentage of your vested balance should be transferred (e.g. 50 for 50%)?")
+        else:
+            try:
+                result = paap_execute(
+                    participant_id=participant_id,
+                    agent_id=session.agent_id or "portal",
+                    action="qdro",
+                    payload=tx_params,
+                )
+            except UnauthorizedByFAP as e:
+                reply_parts.append(_haiku_reply(
+                    system_extra=(
+                        f"FAP denied a QDRO request.\n"
+                        f"Denial reason: {e.denial_reason}\nDenial code: {e.denial_code}"
+                    ),
+                    instruction="Explain in 2-3 sentences why the QDRO was denied and what the participant can do.",
+                ))
+                result = None
+            except Exception as e:
+                reply_parts.append(f"Unable to process your QDRO request right now: {e}")
+                result = None
+
+            if result is not None:
+                autonomy = result["autonomy_level"]
+                fap_token = result.get("fap_token")
+                if autonomy == "human_review" and fap_token:
+                    import datetime
+                    from data.review_queue import enqueue
+                    entry_id = enqueue(
+                        participant_id=participant_id,
+                        plan_id=result["plan_id"],
+                        agent_id=session.agent_id or "portal",
+                        principal_type="participant",
+                        action="qdro",
+                        payload=tx_params,
+                        fap_audit_id=result.get("fap_audit_id") or "",
+                        fap_token=fap_token,
+                        created_at=datetime.datetime.utcnow().isoformat() + "Z",
+                    )
+                    payee = tx_params.get("alternate_payee_name", "")
+                    pct   = tx_params.get("transfer_pct", 0)
+                    reply_parts.append(_haiku_reply(
+                        system_extra="",
+                        instruction=(
+                            f"A QDRO (Qualified Domestic Relations Order) of {pct}% to '{payee}' passed "
+                            f"compliance checks and is queued for plan sponsor review. Tell the participant: "
+                            f"(1) it needs sponsor approval, (2) they must upload the court order, "
+                            f"(3) they'll be notified when approved. 3 sentences."
+                        ),
+                    ))
+                    transaction = {
+                        "action":               "qdro",
+                        "alternate_payee_name": payee,
+                        "transfer_pct":         pct,
+                        "entry_id":             entry_id,
+                    }
+
+    # ── Beneficiary update ────────────────────────────────────────────────
+    if tx_intent == "beneficiary_update":
+        if tx_missing:
+            first = tx_missing[0]
+            if first == "beneficiary_name":
+                reply_parts.append("What is the full name of your beneficiary?")
+            elif first == "relationship":
+                reply_parts.append("What is their relationship to you? (spouse, child, parent, sibling, estate, or other)")
+        else:
+            try:
+                result = paap_execute(
+                    participant_id=participant_id,
+                    agent_id=session.agent_id or "portal",
+                    action="beneficiary_update",
+                    payload=tx_params,
+                )
+            except UnauthorizedByFAP as e:
+                reply_parts.append(_haiku_reply(
+                    system_extra=(
+                        f"FAP denied a beneficiary update.\n"
+                        f"Denial reason: {e.denial_reason}\nDenial code: {e.denial_code}"
+                    ),
+                    instruction="Explain in 2 sentences why the beneficiary update was denied.",
+                ))
+                result = None
+            except Exception as e:
+                reply_parts.append(f"Unable to process your beneficiary update right now: {e}")
+                result = None
+
+            if result is not None:
+                autonomy = result["autonomy_level"]
+                fap_token = result.get("fap_token")
+                if autonomy == "human_review" and fap_token:
+                    import datetime
+                    from data.review_queue import enqueue
+                    entry_id = enqueue(
+                        participant_id=participant_id,
+                        plan_id=result["plan_id"],
+                        agent_id=session.agent_id or "portal",
+                        principal_type="participant",
+                        action="beneficiary_update",
+                        payload=tx_params,
+                        fap_audit_id=result.get("fap_audit_id") or "",
+                        fap_token=fap_token,
+                        created_at=datetime.datetime.utcnow().isoformat() + "Z",
+                    )
+                    name = tx_params.get("beneficiary_name", "")
+                    rel  = tx_params.get("relationship", "")
+                    reply_parts.append(_haiku_reply(
+                        system_extra="",
+                        instruction=(
+                            f"A beneficiary update designating '{name}' ({rel}) passed compliance checks "
+                            f"and is queued for plan sponsor review. Tell the participant it needs sponsor "
+                            f"approval and they'll be notified when confirmed. 2 sentences."
+                        ),
+                    ))
+                    transaction = {
+                        "action":           "beneficiary_update",
+                        "beneficiary_name": name,
+                        "relationship":     rel,
+                        "entry_id":         entry_id,
                     }
 
     # ── Nothing matched ───────────────────────────────────────────────────

@@ -368,5 +368,66 @@ def _execute_write(participant_id: str, plan_id: str, action: str, payload: dict
             autonomy_level="human_review",
         )
 
-    # separation_distribution, beneficiary_update, qdro — handled similarly
-    # when those are implemented; sponsor approves, execute_confirmed() is called here.
+    elif action == "in_service_distribution":
+        amount = Decimal(str(payload.get("amount", 0)))
+        db.decrement_vested_balance(participant_id=participant_id, amount=amount)
+        db.record_transaction(
+            participant_id=participant_id,
+            plan_id=plan_id,
+            action=action,
+            amount=amount,
+            payload=payload,
+            autonomy_level="human_review",
+        )
+
+    elif action == "separation_distribution":
+        amount = Decimal(str(payload.get("amount", 0)))
+        db.decrement_vested_balance(participant_id=participant_id, amount=amount)
+        db.record_transaction(
+            participant_id=participant_id,
+            plan_id=plan_id,
+            action=action,
+            amount=amount,
+            payload=payload,
+            autonomy_level="human_review",
+        )
+
+    elif action == "rmd":
+        from data.db import get_participant as _get_p
+        p = _get_p(participant_id)
+        amount = Decimal(str(p.rmd_amount_current_year)) if (p and p.rmd_amount_current_year) else Decimal("0")
+        if amount > 0:
+            db.decrement_vested_balance(participant_id=participant_id, amount=amount)
+        db.record_transaction(
+            participant_id=participant_id,
+            plan_id=plan_id,
+            action=action,
+            amount=amount,
+            payload=payload,
+            autonomy_level="human_review",
+        )
+
+    elif action == "qdro":
+        from data.db import get_participant as _get_p
+        p = _get_p(participant_id)
+        transfer_pct = Decimal(str(payload.get("transfer_pct", 50))) / 100
+        amount = (p.vested_balance * transfer_pct) if p else Decimal("0")
+        if amount > 0:
+            db.decrement_vested_balance(participant_id=participant_id, amount=amount)
+        db.record_transaction(
+            participant_id=participant_id,
+            plan_id=plan_id,
+            action=action,
+            amount=amount,
+            payload=payload,
+            autonomy_level="human_review",
+        )
+
+    elif action == "beneficiary_update":
+        db.record_transaction(
+            participant_id=participant_id,
+            plan_id=plan_id,
+            action=action,
+            payload=payload,
+            autonomy_level="human_review",
+        )

@@ -21,7 +21,6 @@ export default function ChatWindow() {
     pendingBankDetails,
     isStreaming,
     isResolving,
-    sendMessage,
     sendFastMessage,
     confirmTransaction,
     cancelTransaction,
@@ -30,8 +29,6 @@ export default function ChatWindow() {
     submitBankDetails,
     dismissBankDetails,
   } = useChatStream();
-
-  const [fastMode, setFastMode] = useState(true);
 
   const location = useLocation();
 
@@ -76,20 +73,6 @@ export default function ChatWindow() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {/* Fast / CrewAI toggle */}
-          <button
-            type="button"
-            onClick={() => setFastMode((v) => !v)}
-            title={fastMode ? 'Switch to CrewAI (slower, more capable)' : 'Switch to Fast mode (Haiku, ~5s)'}
-            className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border transition-colors ${
-              fastMode
-                ? 'border-accent/50 text-accent bg-accent/8'
-                : 'border-border text-text-muted hover:text-text'
-            }`}
-          >
-            {fastMode ? '⚡ Fast' : '🤖 CrewAI'}
-          </button>
-
           {messages.length > 0 && (
             <button
               type="button"
@@ -179,7 +162,7 @@ export default function ChatWindow() {
       <ChatInput
         value={draft}
         onChange={setDraft}
-        onSend={(msg) => { fastMode ? sendFastMessage(msg) : sendMessage(msg); }}
+        onSend={sendFastMessage}
         disabled={blocked}
       />
     </div>

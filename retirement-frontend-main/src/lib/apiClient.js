@@ -18,36 +18,6 @@ function authHeader() {
   return { Authorization: `Bearer ${session.sessionToken}` };
 }
 
-async function streamChatViaBackend(message, onEvent) {
-  const response = await fetch(`${BASE_URL}/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeader() },
-    body: JSON.stringify({ message }),
-  });
-
-  if (!response.ok || !response.body) {
-    throw new ApiError(`Chat request failed with status ${response.status}`, response.status);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split('\n\n');
-    buffer = chunks.pop() ?? '';
-    for (const chunk of chunks) {
-      const line = chunk.trim();
-      if (!line.startsWith('data:')) continue;
-      const jsonStr = line.slice(5).trim();
-      if (!jsonStr) continue;
-      try { onEvent(JSON.parse(jsonStr)); } catch { /* skip malformed */ }
-    }
-  }
-}
 
 async function request(path, { method = 'GET', body, auth = false } = {}) {
   const response = await fetch(`${BASE_URL}${path}`, {
@@ -105,19 +75,19 @@ export const apiClient = {
     return request('/admin/audit', { auth: true });
   },
 
-  async activateBlackout({ planId, startDate, endDate, reason }) {
+  async activateBlackout({ startDate, endDate, reason }) {
     return request('/admin/blackout', {
       method: 'POST',
       auth: true,
-      body: { plan_id: planId, start_date: startDate, end_date: endDate, reason },
+      body: { activate: true, start_date: startDate, end_date: endDate, reason: reason || '' },
     });
   },
 
-  async deactivateBlackout({ planId }) {
+  async deactivateBlackout() {
     return request('/admin/blackout', {
       method: 'POST',
       auth: true,
-      body: { plan_id: planId, action: 'deactivate' },
+      body: { activate: false },
     });
   },
 
@@ -165,10 +135,6 @@ export const apiClient = {
     return request('/health');
   },
 
-  async streamChat(message, { onEvent } = {}) {
-    return streamChatViaBackend(message, onEvent);
-  },
-
   async chatFast(message, history = []) {
     const res = await fetch(`${BASE_URL}/chat/fast`, {
       method: 'POST',
@@ -208,60 +174,6 @@ export const apiClient = {
     return request('/transactions/pending', { auth: true });
   },
 
-  async uploadDocument({ queueEntryId, actionType, expenseType, docType, file }) {
-    const fd = new FormData();
-    fd.append('queue_entry_id', String(queueEntryId));
-    fd.append('action_type', actionType);
-    fd.append('expense_type', expenseType || '');
-    fd.append('doc_type', docType);
-    fd.append('file', file);
-
-    const response = await fetch(`${BASE_URL}/documents/upload`, {
-      method: 'POST',
-      headers: { ...authHeader() },
-      body: fd,
-    });
-
-    if (!response.ok || !response.body) {
-      let detail = `Upload failed: ${response.status}`;
-      try { detail = (await response.json()).detail || detail; } catch { /* ignore */ }
-      throw new ApiError(detail, response.status);
-    }
-
-    // The upload endpoint returns SSE — read the stream and pull out the final
-    // "response" event which contains the LLM verification summary.
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let finalContent = null;
-
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const chunks = buffer.split('\n\n');
-      buffer = chunks.pop() ?? '';
-      for (const chunk of chunks) {
-        const line = chunk.trim();
-        if (!line.startsWith('data:')) continue;
-        const jsonStr = line.slice(5).trim();
-        if (!jsonStr) continue;
-        try {
-          const event = JSON.parse(jsonStr);
-          if (event.type === 'response') finalContent = event.content || null;
-          if (event.type === 'error') throw new ApiError(event.message || 'Verification failed', 500);
-        } catch (e) {
-          if (e instanceof ApiError) throw e;
-          /* skip malformed chunks */
-        }
-      }
-    }
-
-    return { content: finalContent };
-  },
-
-  // Fast document upload — calls /documents/upload-fast which runs Haiku verification
-  // directly (no CrewAI, no SSE). Returns structured JSON.
   async uploadDocumentFast({ queueEntryId, actionType, expenseType, docType, file }) {
     const fd = new FormData();
     fd.append('queue_entry_id', String(queueEntryId));
