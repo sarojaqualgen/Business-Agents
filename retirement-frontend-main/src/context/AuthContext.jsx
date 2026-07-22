@@ -34,22 +34,24 @@ export function AuthProvider({ children }) {
     return () => clearTimeout(timer);
   }, [session]);
 
-  const login = useCallback(async ({ principalType, participantId, planId }) => {
+  const login = useCallback(async ({ principalType, participantId, planId, password }) => {
     setIsLoading(true);
     setError(null);
     try {
       const res = await apiClient.login({
         principal_type: principalType,
         participant_id: participantId || null,
-        plan_id: planId || null,
+        plan_id:        planId || null,
+        password,
       });
       const nextSession = {
         sessionToken: res.session_token,
         expiresAt: Date.now() + res.expires_in * 1000,
         principal: {
-          principalType,
-          participantId: participantId || null,
-          planId: planId || null,
+          principalType:  res.principal_type,
+          participantId:  res.participant_id || null,
+          planId:         res.plan_id || null,
+          displayName:    res.display_name || null,
         },
       };
       setSession(nextSession);

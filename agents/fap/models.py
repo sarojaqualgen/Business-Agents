@@ -54,7 +54,9 @@ class DenialCode(str, Enum):
     loans_outstanding_limit = "LOANS_OUTSTANDING_LIMIT"
     hardship_not_permitted = "HARDSHIP_NOT_PERMITTED"
     hardship_criteria_not_met = "HARDSHIP_CRITERIA_NOT_MET"
+    hardship_not_active_employee = "HARDSHIP_NOT_ACTIVE_EMPLOYEE"
     in_service_age_not_met = "IN_SERVICE_AGE_NOT_MET"
+    in_service_not_active_employee = "IN_SERVICE_NOT_ACTIVE_EMPLOYEE"
     separation_status_invalid = "SEPARATION_STATUS_INVALID"
     rollover_notice_not_issued = "ROLLOVER_NOTICE_NOT_ISSUED"
     rmd_not_yet_required = "RMD_NOT_YET_REQUIRED"
@@ -75,6 +77,8 @@ class DenialCode(str, Enum):
     roth_catchup_required = "ROTH_CATCHUP_REQUIRED"
     # Rule 6 — RMD notice
     rmd_notice_not_issued = "RMD_NOTICE_NOT_ISSUED"
+    # Rule 10 — taxable event disclosure
+    taxable_event_not_acknowledged = "TAXABLE_EVENT_NOT_ACKNOWLEDGED"
 
 
 # ---------------------------------------------------------------------------

@@ -458,6 +458,25 @@ def _check_hardship_rules(
     plan: PlanRecord,
     payload: dict[str, Any],
 ) -> RuleResult:
+    # IRS Treas. Reg. §1.401(k)-1(d)(3): safe-harbor hardship distributions are
+    # limited to employees. A terminated or retired participant must use a
+    # separation distribution instead.
+    if participant.employment_status not in {"active", "on_leave", "military_leave"}:
+        _status = getattr(participant.employment_status, "value", str(participant.employment_status))
+        return RuleResult(
+            passed=False,
+            rule_number=6,
+            rule_name="Plan Rule Enforcement",
+            denial_code=DenialCode.hardship_not_active_employee,
+            denial_reason=(
+                f"Hardship distributions are only available to active employees. "
+                f"Participant employment status is '{_status}'. "
+                f"Former employees should request a separation distribution instead."
+            ),
+            erisa_citation="Treas. Reg. §1.401(k)-1(d)(3)",
+            master_ref_section="§5.4",
+        )
+
     hp = plan.hardship_policy
 
     if not hp.hardship_permitted:
@@ -524,6 +543,25 @@ def _check_in_service_rules(
     participant: ParticipantRecord,
     plan: PlanRecord,
 ) -> RuleResult:
+    # "In-service" means the participant is currently in service (actively employed).
+    # A terminated or retired participant cannot take an in-service distribution —
+    # their path is separation_distribution.
+    if participant.employment_status not in {"active", "on_leave", "military_leave"}:
+        _status = getattr(participant.employment_status, "value", str(participant.employment_status))
+        return RuleResult(
+            passed=False,
+            rule_number=6,
+            rule_name="Plan Rule Enforcement",
+            denial_code=DenialCode.in_service_not_active_employee,
+            denial_reason=(
+                f"In-service distributions require active employment. "
+                f"Participant employment status is '{_status}'. "
+                f"Former employees should request a separation distribution instead."
+            ),
+            erisa_citation="IRC § 401(k)(2)(B)(i)(I)",
+            master_ref_section="§5.1",
+        )
+
     if not plan.distribution_options.in_service_age_59_5:
         return RuleResult(
             passed=False,
@@ -710,24 +748,30 @@ def rule_07_early_withdrawal_penalty(
     payload: dict[str, Any],
 ) -> RuleResult:
     # Only distributions can trigger the early withdrawal penalty.
-    # hardship_distribution is always routed to human_review (Rule 12), so we don't
-    # block it here — the human reviewer handles penalty disclosure. We just add a condition.
-    agent_discretion_actions = {
-        ActionType.in_service_distribution,
-        ActionType.separation_distribution,
-    }
+    #
+    # in_service_distribution — Rule 6 already enforces age 59.5+, so Rule 7 is a
+    # backstop: if somehow someone under 59.5 reaches this rule, block.
+    #
+    # separation_distribution — a terminated participant's vested balance must be
+    # released regardless of age. The 10% penalty is a tax consequence on the
+    # participant's return, NOT a plan-level ERISA compliance blocker. Approve with
+    # a condition so the reviewer discloses the penalty.
+    #
+    # hardship_distribution — same: valid distribution, penalty disclosed as condition.
+    blocking_actions = {ActionType.in_service_distribution}
     informational_actions = {
         ActionType.hardship_distribution,
+        ActionType.separation_distribution,
     }
 
-    if action not in agent_discretion_actions and action not in informational_actions:
+    if action not in blocking_actions and action not in informational_actions:
         return RuleResult(passed=True, rule_number=7, rule_name="Early Withdrawal Penalty Check")
 
     age = _age_on(participant.date_of_birth)
     if age >= 59.5:
         return RuleResult(passed=True, rule_number=7, rule_name="Early Withdrawal Penalty Check")
 
-    # Check for valid exceptions
+    # Check for valid IRC §72(t) exceptions
     exception = payload.get("penalty_exception")
     valid_exceptions = {
         "separation_age_55",        # Separation at age 55+
@@ -762,29 +806,31 @@ def rule_07_early_withdrawal_penalty(
     if exception in valid_exceptions:
         return RuleResult(passed=True, rule_number=7, rule_name="Early Withdrawal Penalty Check")
 
-    # Hardship distributions are not blocked — they're valid but must go to human_review.
-    # We add a condition so the reviewer knows the penalty applies.
+    # Informational actions: approve but surface the penalty as a condition for the
+    # human reviewer. The participant acknowledged the tax event; the reviewer must
+    # confirm exception status or note penalty applies in the approval letter.
     if action in informational_actions:
         return RuleResult(
             passed=True,
             rule_number=7,
             rule_name="Early Withdrawal Penalty Check",
             conditions=[
-                f"Pre-59½ hardship distribution (participant age: {age:.1f}). "
-                f"10% early withdrawal penalty (IRC § 72(t)) will apply unless an exception is confirmed by human reviewer."
+                f"Pre-59½ distribution (participant age: {age:.1f}). "
+                f"10% early withdrawal penalty (IRC § 72(t)) will apply unless a valid "
+                f"exception is confirmed. Reviewer must disclose penalty in approval notice."
             ],
         )
 
-    # in_service_distribution and separation_distribution without a valid exception are blocked.
+    # in_service_distribution backstop: Rule 6 should have blocked this already,
+    # but if it reaches here without age 59.5+ something is wrong — deny.
     return RuleResult(
         passed=False,
         rule_number=7,
         rule_name="Early Withdrawal Penalty Check",
         denial_code=DenialCode.early_withdrawal_penalty_applies,
         denial_reason=(
-            f"Distribution before age 59½ (participant age: {age:.1f}) is subject to a "
-            f"10% early withdrawal penalty under IRC § 72(t). "
-            f"Provide a valid penalty_exception in the payload, or route to human review."
+            f"In-service distribution before age 59½ (participant age: {age:.1f}) is subject "
+            f"to a 10% early withdrawal penalty under IRC § 72(t) with no valid exception provided."
         ),
         erisa_citation="IRC § 72(t)",
         master_ref_section="§5.3",
@@ -905,8 +951,30 @@ def rule_10_prudent_expert_loyalty(
     if action not in high_stakes:
         return RuleResult(passed=True, rule_number=10, rule_name="Prudent Expert and Loyalty")
 
-    # These transactions are not blocked outright but always require human_review.
-    # Rule 10 passes and contributes a condition; Rule 12 will assign human_review.
+    # Taxable distributions require explicit participant acknowledgment before FAP issues a token.
+    # This creates an auditable record that the participant understood the tax consequence.
+    taxable_distribution_actions = {
+        ActionType.hardship_distribution,
+        ActionType.in_service_distribution,
+        ActionType.separation_distribution,
+        ActionType.rmd,
+    }
+    if action in taxable_distribution_actions and not payload.get("taxable_event_acknowledged"):
+        return RuleResult(
+            passed=False,
+            rule_number=10,
+            rule_name="Prudent Expert and Loyalty",
+            denial_code=DenialCode.taxable_event_not_acknowledged,
+            denial_reason=(
+                "Participant must explicitly acknowledge that this distribution is a taxable event. "
+                "Distributions are subject to ordinary income tax, and a 10% early withdrawal penalty "
+                "under IRC § 72(t) may also apply if the participant is under age 59½. "
+                "Set taxable_event_acknowledged=True in the payload to confirm acknowledgment."
+            ),
+            erisa_citation="ERISA § 404 / IRC § 72(t)",
+            master_ref_section="§6.2",
+        )
+
     return RuleResult(
         passed=True,
         rule_number=10,

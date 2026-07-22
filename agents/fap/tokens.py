@@ -30,8 +30,20 @@ _TTL_SECONDS = 86400  # 24 hours
 _consumed_tokens: set[str] = set()
 
 
+def _normalize_payload(obj):
+    """Normalize floats to int where possible so JSONB round-trips don't change the hash.
+    PostgreSQL JSONB stores 30000.0 as 30000 — this keeps hashes consistent."""
+    if isinstance(obj, float) and obj.is_integer():
+        return int(obj)
+    if isinstance(obj, dict):
+        return {k: _normalize_payload(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_normalize_payload(v) for v in obj]
+    return obj
+
+
 def _payload_hash(payload: dict) -> str:
-    canonical = json.dumps(payload, sort_keys=True, default=str)
+    canonical = json.dumps(_normalize_payload(payload), sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
@@ -119,6 +131,17 @@ def validate_token(
     try:
         from data import db  # noqa: PLC0415
         if not db.consume_token(token_id):
+            # Distinguish "consumed/expired" from "never written to DB" (silent write failure).
+            # If the row doesn't exist, the JWT is still cryptographically valid — use in-memory
+            # double-spend tracking so participants can complete their transactions.
+            try:
+                if not db.token_exists(token_id):
+                    if token_id in _consumed_tokens:
+                        return False, "Token has already been consumed (single-use)."
+                    _consumed_tokens.add(token_id)
+                    return True, ""
+            except Exception:
+                pass
             return False, "Token has already been consumed (single-use) or has expired."
         return True, ""
     except Exception:

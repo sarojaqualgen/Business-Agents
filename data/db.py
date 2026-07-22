@@ -397,6 +397,14 @@ def is_token_consumed(token_id: str) -> bool:
         return row["consumed"]
 
 
+def token_exists(token_id: str) -> bool:
+    """Check if a token record is present in fap_tokens at all."""
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM fap_tokens WHERE token_id = %s", (token_id,))
+        return cur.fetchone() is not None
+
+
 def consume_token(token_id: str) -> bool:
     """Mark token as consumed. Returns False if already consumed (double-spend attempt)."""
     with _conn() as conn:
@@ -743,16 +751,17 @@ def get_participant_loans(participant_id: str) -> list[dict]:
 
 
 def decrement_vested_balance(participant_id: str, amount: Decimal) -> None:
-    """Reduce vested_balance after a disbursement. Clamped to 0."""
+    """Reduce vested_balance and total_balance after a disbursement. Clamped to 0."""
     with _conn() as conn:
         cur = conn.cursor()
         cur.execute(
             """
             UPDATE participants
-            SET vested_balance = GREATEST(vested_balance - %s, 0)
+            SET vested_balance = GREATEST(vested_balance - %s, 0),
+                total_balance  = GREATEST(total_balance  - %s, 0)
             WHERE participant_id = %s
             """,
-            (amount, participant_id),
+            (amount, amount, participant_id),
         )
 
 

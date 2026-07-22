@@ -37,6 +37,8 @@ export function useChatStream() {
   const [pendingUpload, setPendingUpload] = useState(null);
   // null | { action } — shown after confirming a supervised loan (awaiting_bank_details)
   const [pendingBankDetails, setPendingBankDetails] = useState(null);
+  // null | { intent, params } — shown when backend needs taxable-event acknowledgment
+  const [pendingTaxAck, setPendingTaxAck] = useState(null);
 
   const clearChat = useCallback(() => dispatch({ type: 'RESET' }), [dispatch]);
   const dismissUpload = useCallback(() => setPendingUpload(null), []);
@@ -96,6 +98,9 @@ export function useChatStream() {
               expenseType: tx.qualifying_expense_type || tx.expense_type || null,
             });
           }
+        }
+        if (res.pending_tax_ack) {
+          setPendingTaxAck(res.pending_tax_ack);
         }
       } catch (err) {
         dispatch({
@@ -283,11 +288,36 @@ export function useChatStream() {
 
   const dismissBankDetails = useCallback(() => setPendingBankDetails(null), []);
 
+  // Taxable event acknowledgment — Confirm auto-sends the acknowledgment text so
+  // Haiku carries the collected params forward and proceeds to FAP.
+  const acknowledgeTax = useCallback(() => {
+    setPendingTaxAck(null);
+    sendFastMessage('Yes, I acknowledge this is a taxable event and wish to proceed');
+  }, [sendFastMessage]);
+
+  const cancelTaxAck = useCallback(() => {
+    setPendingTaxAck(null);
+    const cancelId = nextId('assistant');
+    dispatch({ type: 'ADD_USER_MESSAGE', payload: { id: nextId('user'), text: 'Cancel' } });
+    dispatch({ type: 'ADD_ASSISTANT_PLACEHOLDER', payload: { id: cancelId } });
+    dispatch({
+      type: 'COMPLETE_ASSISTANT_MESSAGE',
+      payload: {
+        id:       cancelId,
+        text:     "Request cancelled. Let me know if there's anything else I can help with.",
+        autonomy: null,
+        transaction: null,
+        isError:  false,
+      },
+    });
+  }, [dispatch]);
+
   return {
     messages: state.messages,
     pendingTransaction: state.pendingTransaction,
     pendingUpload,
     pendingBankDetails,
+    pendingTaxAck,
     isStreaming,
     isResolving,
     sendMessage,
@@ -298,5 +328,7 @@ export function useChatStream() {
     dismissUpload,
     submitBankDetails,
     dismissBankDetails,
+    acknowledgeTax,
+    cancelTaxAck,
   };
 }

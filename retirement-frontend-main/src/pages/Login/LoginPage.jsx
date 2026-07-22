@@ -65,35 +65,32 @@ function isMobile() {
 }
 
 export default function LoginPage() {
-  const { login, isAuthenticated, isLoading } = useAuth();
+  const { login, isAuthenticated, isLoading, principal } = useAuth();
   const navigate  = useNavigate();
   const location  = useLocation();
 
-  // 'hero' → 'form'
-  // On mobile we skip directly to 'form'.
+  // 'hero' → 'form'. On mobile we skip directly to 'form'.
   const [phase, setPhase]                 = useState(() => (isMobile() ? 'form' : 'hero'));
   const [principalType, setPrincipalType] = useState(null);
   const [participantId, setParticipantId] = useState('');
   const [planId, setPlanId]               = useState('');
+  const [password, setPassword]           = useState('');
+  const [showPassword, setShowPassword]   = useState(false);
   const [participants, setParticipants]   = useState([]);
   const [plans, setPlans]                 = useState([]);
   const [formError, setFormError]         = useState(null);
   const [heroIn, setHeroIn]               = useState(false);
   const [formContentIn, setFormContentIn] = useState(false);
-  // Exit transition states
-  const [loginSuccess, setLoginSuccess]   = useState(false); // welcome flash
-  const [overlayIn, setOverlayIn]         = useState(false); // dark sweep
+  const [loginSuccess, setLoginSuccess]   = useState(false);
+  const [overlayIn, setOverlayIn]         = useState(false);
 
   useEffect(() => { setTimeout(() => setHeroIn(true), 60); }, []);
 
   useEffect(() => {
     if (!isAuthenticated) return;
-    // Step 1 — show welcome flash (right column swaps to success state)
     setLoginSuccess(true);
-    // Step 2 — dark overlay starts sweeping in after a beat
     const t1 = setTimeout(() => setOverlayIn(true), 420);
-    // Step 3 — navigate once the overlay fully covers the screen
-    const dest = location.state?.from?.pathname || (principalType === 'plan_sponsor' ? '/sponsor' : '/participant');
+    const dest = location.state?.from?.pathname || (principal?.principalType === 'plan_sponsor' ? '/sponsor' : '/participant');
     const t2 = setTimeout(() => navigate(dest, { replace: true }), 900);
     return () => { clearTimeout(t1); clearTimeout(t2); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -127,11 +124,11 @@ export default function LoginPage() {
     setPrincipalType(role);
     if (role === 'plan_sponsor' && plans[0]) setPlanId(plans[0].plan_id);
     setFormError(null);
+    setPassword('');
   }
 
   function openPortal() {
     setPhase('form');
-    // Stagger: let the bg colour transition start first, then fade in form content
     setTimeout(() => setFormContentIn(true), 320);
   }
 
@@ -139,7 +136,7 @@ export default function LoginPage() {
     e.preventDefault();
     setFormError(null);
     try {
-      await login({ principalType, participantId: principalType === 'participant' ? participantId : null, planId });
+      await login({ principalType, participantId: principalType === 'participant' ? participantId : null, planId, password });
     } catch (err) {
       setFormError(err.message || 'Login failed. Please try again.');
     }
@@ -147,8 +144,7 @@ export default function LoginPage() {
 
   const isHero = phase === 'hero';
 
-  // Right column bg & text colour animate on transition
-  const rightBg   = isHero ? 'rgba(255,255,255,0.03)' : '#F6F7F9';
+  const rightBg     = isHero ? 'rgba(255,255,255,0.03)' : '#F6F7F9';
   const rightBorder = isHero ? '1px solid rgba(255,255,255,0.06)' : '1px solid #E5E8EF';
 
   return (
@@ -201,38 +197,24 @@ export default function LoginPage() {
         .sign-in-btn:active:not(:disabled) { transform: translateY(0); }
       `}</style>
 
-      {/* ── Root shell ────────────────────────────────────────────────────── */}
+      {/* ── Root shell ─────────────────────────────────────────────────────── */}
       <div style={{
-        minHeight: '100vh',
-        display: 'flex',
-        overflow: 'hidden',
+        minHeight: '100vh', display: 'flex', overflow: 'hidden',
         fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
-        background: PANEL_BG,
-        backgroundImage: STRIPE_TEXTURE,
+        background: PANEL_BG, backgroundImage: STRIPE_TEXTURE,
       }}>
 
-        {/* ══════════════════════════════════════════════════════════════════
-            LEFT — brand panel (always ~56% wide)
-        ══════════════════════════════════════════════════════════════════ */}
+        {/* ══ LEFT — brand panel ══════════════════════════════════════════════ */}
         <div style={{
-          width: '56%',
-          flexShrink: 0,
-          position: 'relative',
-          overflow: 'hidden',
-          display: 'flex',
-          flexDirection: 'column',
-          padding: '44px 64px',
+          width: '56%', flexShrink: 0, position: 'relative', overflow: 'hidden',
+          display: 'flex', flexDirection: 'column', padding: '44px 64px',
         }}>
-
           {/* Left-edge accent bar */}
           <div style={{
-            position: 'absolute', left: 0, top: '50%',
-            transform: 'translateY(-50%)',
-            width: 3,
-            height: heroIn ? 72 : 0,
+            position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)',
+            width: 3, height: heroIn ? 72 : 0,
             background: 'linear-gradient(180deg, transparent, #F97316, transparent)',
-            transition: 'height 0.7s ease-out 0.4s',
-            borderRadius: 2,
+            transition: 'height 0.7s ease-out 0.4s', borderRadius: 2,
           }} />
 
           {/* Logo */}
@@ -244,69 +226,37 @@ export default function LoginPage() {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <QualGenLogo height={30} iconOnly={true} />
-              <span style={{
-                fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
-                fontSize: 22, fontWeight: 800, letterSpacing: '-0.03em',
-                lineHeight: 1,
-                color: '#fff',
-              }}>
+              <span style={{ fontFamily: 'Inter, system-ui, -apple-system, sans-serif', fontSize: 22, fontWeight: 800, letterSpacing: '-0.03em', lineHeight: 1, color: '#fff' }}>
                 QRetire
               </span>
             </div>
-            <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 11, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.06em', paddingLeft: 3}}>
+            <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 11, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.06em', paddingLeft: 3 }}>
               Powered by Qualgen.ai
             </div>
           </div>
 
-          {/* Hero headline + trust items — grows to fill remaining space */}
-          <div style={{
-            flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center',
-            paddingTop: 16,
-          }}>
-            {/* ERISA pill */}
-            <div style={{
-              display: 'inline-flex', alignItems: 'center', gap: 8,
-              border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: 6, padding: '5px 12px',
-              marginBottom: 24, width: 'fit-content',
-              opacity: heroIn ? 1 : 0,
-              animation: heroIn ? 'hero-in 0.5s ease-out 0.08s both' : 'none',
-            }}>
+          {/* Hero headline + trust items */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', paddingTop: 16 }}>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, padding: '5px 12px', marginBottom: 24, width: 'fit-content', opacity: heroIn ? 1 : 0, animation: heroIn ? 'hero-in 0.5s ease-out 0.08s both' : 'none' }}>
               <div style={{ width: 5, height: 5, borderRadius: '50%', background: '#F97316', flexShrink: 0 }} />
               <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: 10, fontFamily: 'ui-monospace, monospace', letterSpacing: '0.07em' }}>
                 ERISA-COMPLIANT · SECURE 2.0 READY
               </span>
             </div>
 
-            <h1 style={{
-              color: '#fff', fontWeight: 800, lineHeight: 1.07,
-              fontSize: 'clamp(34px, 4vw, 56px)',
-              letterSpacing: '-0.025em', marginBottom: 18,
-              opacity: heroIn ? 1 : 0,
-              animation: heroIn ? 'hero-in 0.55s ease-out 0.14s both' : 'none',
-            }}>
+            <h1 style={{ color: '#fff', fontWeight: 800, lineHeight: 1.07, fontSize: 'clamp(34px, 4vw, 56px)', letterSpacing: '-0.025em', marginBottom: 18, opacity: heroIn ? 1 : 0, animation: heroIn ? 'hero-in 0.55s ease-out 0.14s both' : 'none' }}>
               401(k) administration<br />
               <span style={{ color: '#F97316' }}>built for trust.</span>
             </h1>
 
-            <p style={{
-              color: 'rgba(255,255,255,0.4)', fontSize: 15, lineHeight: 1.75,
-              maxWidth: 380, marginBottom: 44,
-              opacity: heroIn ? 1 : 0,
-              animation: heroIn ? 'hero-in 0.5s ease-out 0.2s both' : 'none',
-            }}>
+            <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: 15, lineHeight: 1.75, maxWidth: 380, marginBottom: 44, opacity: heroIn ? 1 : 0, animation: heroIn ? 'hero-in 0.5s ease-out 0.2s both' : 'none' }}>
               Every participant action gates through a 12-rule fiduciary
               compliance engine before execution. No exceptions.
             </p>
 
-            {/* Trust items */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
               {TRUST_ITEMS.map((item, i) => (
-                <div key={item.label} style={{
-                  display: 'flex', alignItems: 'flex-start', gap: 12,
-                  opacity: heroIn ? 1 : 0,
-                  animation: heroIn ? `hero-in 0.45s ease-out ${0.28 + i * 0.07}s both` : 'none',
-                }}>
+                <div key={item.label} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, opacity: heroIn ? 1 : 0, animation: heroIn ? `hero-in 0.45s ease-out ${0.28 + i * 0.07}s both` : 'none' }}>
                   <div style={{ width: 4, height: 4, borderRadius: 1, background: '#F97316', marginTop: 7, flexShrink: 0 }} />
                   <div>
                     <div style={{ color: 'rgba(255,255,255,0.85)', fontSize: 13, fontWeight: 600 }}>{item.label}</div>
@@ -317,81 +267,32 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Footer */}
-          <div style={{
-            color: 'rgba(255,255,255,0.18)', fontSize: 10,
-            fontFamily: 'ui-monospace, monospace',
-            opacity: heroIn ? 1 : 0,
-            animation: heroIn ? 'hero-in 0.4s ease-out 0.52s both' : 'none',
-          }}>
+          <div style={{ color: 'rgba(255,255,255,0.18)', fontSize: 10, fontFamily: 'ui-monospace, monospace', opacity: heroIn ? 1 : 0, animation: heroIn ? 'hero-in 0.4s ease-out 0.52s both' : 'none' }}>
             QRetire · Powered by Qualgen.ai · Demo environment · No real data
           </div>
         </div>
 
-        {/* ══════════════════════════════════════════════════════════════════
-            RIGHT — CTA in hero phase, form in form phase
-            Always 44% wide. Background colour transitions dark → light.
-        ══════════════════════════════════════════════════════════════════ */}
+        {/* ══ RIGHT — CTA in hero phase, form in form phase ═══════════════════ */}
         <div style={{
-          flex: 1,
-          minWidth: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '44px 40px',
-          borderLeft: rightBorder,
-          background: rightBg,
-          transition: 'background 0.55s ease, border-color 0.55s ease',
-          position: 'relative',
+          flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '44px 40px', borderLeft: rightBorder, background: rightBg,
+          transition: 'background 0.55s ease, border-color 0.55s ease', position: 'relative',
         }}>
 
-          {/* ── HERO phase: centred Access Portal CTA ── */}
+          {/* ── HERO phase ── */}
           {isHero && (
-            <div style={{
-              display: 'flex', flexDirection: 'column', alignItems: 'center',
-              textAlign: 'center', maxWidth: 300, gap: 0,
-              opacity: heroIn ? 1 : 0,
-              animation: heroIn ? 'hero-in 0.55s ease-out 0.35s both' : 'none',
-            }}>
-              {/* Shield icon */}
-              <div style={{
-                width: 64, height: 64, borderRadius: 18,
-                background: 'rgba(249,115,22,0.1)',
-                border: '1px solid rgba(249,115,22,0.2)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: '#F97316', marginBottom: 22,
-              }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 300, gap: 0, opacity: heroIn ? 1 : 0, animation: heroIn ? 'hero-in 0.55s ease-out 0.35s both' : 'none' }}>
+              <div style={{ width: 64, height: 64, borderRadius: 18, background: 'rgba(249,115,22,0.1)', border: '1px solid rgba(249,115,22,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#F97316', marginBottom: 22 }}>
                 <ShieldCheckIcon />
               </div>
-
-              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
-                Ready to sign in?
-              </div>
+              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Ready to sign in?</div>
               <div style={{ color: 'rgba(255,255,255,0.32)', fontSize: 12, lineHeight: 1.6, marginBottom: 32 }}>
                 Access your participant portal or the plan administrator console.
               </div>
-
-              <button
-                className="portal-cta"
-                onClick={openPortal}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 9,
-                  background: '#F97316', color: '#fff', border: 'none',
-                  borderRadius: 11, padding: '14px 28px',
-                  fontSize: 14, fontWeight: 700, cursor: 'pointer',
-                  boxShadow: '0 4px 18px rgba(249,115,22,0.28)',
-                  width: '100%', justifyContent: 'center',
-                }}
-              >
+              <button className="portal-cta" onClick={openPortal} style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: '#F97316', color: '#fff', border: 'none', borderRadius: 11, padding: '14px 28px', fontSize: 14, fontWeight: 700, cursor: 'pointer', boxShadow: '0 4px 18px rgba(249,115,22,0.28)', width: '100%', justifyContent: 'center' }}>
                 Access Portal <ArrowRight size={15} />
               </button>
-
-              {/* Subtle stat row */}
-              <div style={{
-                display: 'flex', gap: 24, marginTop: 36,
-                paddingTop: 24, borderTop: '1px solid rgba(255,255,255,0.07)',
-                width: '100%', justifyContent: 'center',
-              }}>
+              <div style={{ display: 'flex', gap: 24, marginTop: 36, paddingTop: 24, borderTop: '1px solid rgba(255,255,255,0.07)', width: '100%', justifyContent: 'center' }}>
                 {[['12', 'ERISA rules'], ['6yr', 'Audit log'], ['§404(c)', 'Protected']].map(([val, lbl]) => (
                   <div key={lbl} style={{ textAlign: 'center' }}>
                     <div style={{ color: '#F97316', fontSize: 14, fontWeight: 700, fontFamily: 'ui-monospace, monospace' }}>{val}</div>
@@ -402,72 +303,38 @@ export default function LoginPage() {
             </div>
           )}
 
-          {/* ── FORM phase: role select → account select ── */}
+          {/* ── FORM phase ── */}
           {!isHero && (
-            <div style={{
-              width: '100%', maxWidth: 380,
-              opacity: formContentIn ? 1 : 0,
-              transform: formContentIn ? 'translateY(0)' : 'translateY(16px)',
-              transition: 'opacity 0.4s ease-out, transform 0.4s ease-out',
-            }}>
+            <div style={{ width: '100%', maxWidth: 380, opacity: formContentIn ? 1 : 0, transform: formContentIn ? 'translateY(0)' : 'translateY(16px)', transition: 'opacity 0.4s ease-out, transform 0.4s ease-out' }}>
 
-              {/* ── Welcome success state (shown after login completes) ── */}
+              {/* Welcome success state */}
               {loginSuccess && (
-                <div style={{
-                  display: 'flex', flexDirection: 'column', alignItems: 'center',
-                  textAlign: 'center', gap: 0,
-                  animation: 'form-in 0.3s ease-out',
-                }}>
-                  <div style={{
-                    width: 64, height: 64, borderRadius: '50%',
-                    background: 'rgba(21,128,61,0.12)',
-                    border: '2px solid rgba(21,128,61,0.3)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    marginBottom: 20,
-                    animation: 'check-pop 0.45s cubic-bezier(0.16,1,0.3,1)',
-                  }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 0, animation: 'form-in 0.3s ease-out' }}>
+                  <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'rgba(21,128,61,0.12)', border: '2px solid rgba(21,128,61,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20, animation: 'check-pop 0.45s cubic-bezier(0.16,1,0.3,1)' }}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="#15803D" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" style={{ width: 28, height: 28 }}>
                       <polyline points="20 6 9 17 4 12" />
                     </svg>
                   </div>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: '#0C0E14', marginBottom: 6 }}>
-                    Welcome back
-                  </div>
-                  <div style={{ fontSize: 13, color: '#9AA2B4' }}>
-                    Signing you in…
-                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: '#0C0E14', marginBottom: 6 }}>Welcome back</div>
+                  <div style={{ fontSize: 13, color: '#9AA2B4' }}>Signing you in…</div>
                 </div>
               )}
 
-              {!loginSuccess && <div style={{ marginBottom: 26 }}>
-                <h2 style={{ fontSize: 21, fontWeight: 700, color: '#0C0E14', margin: 0 }}>Sign in</h2>
-                <p style={{ fontSize: 13, color: '#9AA2B4', marginTop: 4 }}>
-                  {principalType ? 'Enter your details below.' : 'Choose your role to continue.'}
-                </p>
-              </div>}
+              {!loginSuccess && (
+                <div style={{ marginBottom: 26 }}>
+                  <h2 style={{ fontSize: 21, fontWeight: 700, color: '#0C0E14', margin: 0 }}>Sign in</h2>
+                  <p style={{ fontSize: 13, color: '#9AA2B4', marginTop: 4 }}>
+                    {principalType ? 'Enter your password to continue.' : 'Choose your role to continue.'}
+                  </p>
+                </div>
+              )}
 
               {/* Role cards */}
               {!loginSuccess && !principalType && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {ROLES.map((role, i) => (
-                    <button
-                      key={role.value}
-                      className="role-card"
-                      onClick={() => selectRole(role.value)}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 14,
-                        padding: '17px 18px',
-                        background: '#fff', border: '1.5px solid #E5E8EF',
-                        borderRadius: 12, cursor: 'pointer',
-                        textAlign: 'left', width: '100%',
-                        animation: formContentIn ? `role-pop 0.36s cubic-bezier(0.16,1,0.3,1) ${0.04 + i * 0.07}s both` : 'none',
-                      }}
-                    >
-                      <div style={{
-                        width: 42, height: 42, borderRadius: 9,
-                        background: '#FFF7ED', color: '#C2410C',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                      }}>
+                    <button key={role.value} className="role-card" onClick={() => selectRole(role.value)} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '17px 18px', background: '#fff', border: '1.5px solid #E5E8EF', borderRadius: 12, cursor: 'pointer', textAlign: 'left', width: '100%', animation: formContentIn ? `role-pop 0.36s cubic-bezier(0.16,1,0.3,1) ${0.04 + i * 0.07}s both` : 'none' }}>
+                      <div style={{ width: 42, height: 42, borderRadius: 9, background: '#FFF7ED', color: '#C2410C', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                         <role.Icon />
                       </div>
                       <div style={{ flex: 1 }}>
@@ -486,29 +353,17 @@ export default function LoginPage() {
               {/* Form after role selected */}
               {!loginSuccess && principalType && (
                 <div style={{ animation: 'form-in 0.3s ease-out' }}>
-                  <button
-                    className="back-link"
-                    onClick={() => { setPrincipalType(null); setFormError(null); }}
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 5,
-                      color: '#B0B8C8', fontSize: 12, cursor: 'pointer',
-                      background: 'none', border: 'none', padding: 0, marginBottom: 18,
-                    }}
-                  >
+                  <button className="back-link" onClick={() => { setPrincipalType(null); setFormError(null); setPassword(''); }} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: '#B0B8C8', fontSize: 12, cursor: 'pointer', background: 'none', border: 'none', padding: 0, marginBottom: 18 }}>
                     <ChevronLeft /> {ROLES.find(r => r.value === principalType)?.label}
                   </button>
 
-                  <div style={{
-                    background: '#fff', borderRadius: 14,
-                    border: '1px solid #E5E8EF', padding: '24px 22px',
-                    boxShadow: '0 1px 4px rgba(16,24,40,0.05)',
-                  }}>
+                  <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #E5E8EF', padding: '24px 22px', boxShadow: '0 1px 4px rgba(16,24,40,0.05)' }}>
                     <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+                      {/* Account selector */}
                       {principalType === 'participant' ? (
                         <div>
-                          <label style={{ display: 'block', fontSize: 10, fontFamily: 'ui-monospace, monospace', color: '#B0B8C8', letterSpacing: '0.07em', marginBottom: 7 }}>
-                            YOUR ACCOUNT
-                          </label>
+                          <label style={{ display: 'block', fontSize: 10, fontFamily: 'ui-monospace, monospace', color: '#B0B8C8', letterSpacing: '0.07em', marginBottom: 7 }}>YOUR ACCOUNT</label>
                           <select className="input-field" value={participantId} onChange={e => handleParticipantChange(e.target.value)}>
                             {participants.length === 0 && <option>Loading…</option>}
                             {participants.map(p => (
@@ -521,9 +376,7 @@ export default function LoginPage() {
                         </div>
                       ) : (
                         <div>
-                          <label style={{ display: 'block', fontSize: 10, fontFamily: 'ui-monospace, monospace', color: '#B0B8C8', letterSpacing: '0.07em', marginBottom: 7 }}>
-                            PLAN TO MANAGE
-                          </label>
+                          <label style={{ display: 'block', fontSize: 10, fontFamily: 'ui-monospace, monospace', color: '#B0B8C8', letterSpacing: '0.07em', marginBottom: 7 }}>PLAN TO MANAGE</label>
                           <select className="input-field" value={planId} onChange={e => setPlanId(e.target.value)}>
                             {plans.length === 0 && <option>Loading…</option>}
                             {plans.map(p => (
@@ -533,37 +386,43 @@ export default function LoginPage() {
                         </div>
                       )}
 
+                      {/* Password */}
+                      <div>
+                        <label style={{ display: 'block', fontSize: 10, fontFamily: 'ui-monospace, monospace', color: '#B0B8C8', letterSpacing: '0.07em', marginBottom: 7 }}>PASSWORD</label>
+                        <div style={{ position: 'relative' }}>
+                          <input
+                            className="input-field"
+                            type={showPassword ? 'text' : 'password'}
+                            autoComplete="current-password"
+                            placeholder="••••••••••"
+                            value={password}
+                            onChange={e => setPassword(e.target.value)}
+                            required
+                            style={{ width: '100%', boxSizing: 'border-box', paddingRight: 40 }}
+                          />
+                          <button type="button" onClick={() => setShowPassword(v => !v)} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#B0B8C8', padding: 2, lineHeight: 1 }} title={showPassword ? 'Hide' : 'Show'}>
+                            {showPassword ? (
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" style={{ width: 15, height: 15 }}>
+                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>
+                              </svg>
+                            ) : (
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" style={{ width: 15, height: 15 }}>
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                              </svg>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
                       {formError && (
-                        <div style={{
-                          fontSize: 12, color: '#DC2626',
-                          background: '#FEF2F2', border: '1px solid #FECACA',
-                          borderRadius: 8, padding: '9px 12px',
-                        }}>{formError}</div>
+                        <div style={{ fontSize: 12, color: '#DC2626', background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 8, padding: '9px 12px' }}>{formError}</div>
                       )}
 
-                      <button
-                        type="submit"
-                        className="sign-in-btn"
-                        disabled={isLoading}
-                        style={{
-                          background: '#F97316', color: '#fff', border: 'none',
-                          borderRadius: 9, padding: '13px',
-                          fontSize: 14, fontWeight: 700,
-                          cursor: isLoading ? 'not-allowed' : 'pointer',
-                          opacity: isLoading ? 0.65 : 1,
-                          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-                          boxShadow: '0 2px 10px rgba(249,115,22,0.2)',
-                          marginTop: 4,
-                        }}
-                      >
+                      <button type="submit" className="sign-in-btn" disabled={isLoading || !password} style={{ background: '#F97316', color: '#fff', border: 'none', borderRadius: 9, padding: '13px', fontSize: 14, fontWeight: 700, cursor: (isLoading || !password) ? 'not-allowed' : 'pointer', opacity: (isLoading || !password) ? 0.65 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, boxShadow: '0 2px 10px rgba(249,115,22,0.2)', marginTop: 4 }}>
                         {isLoading ? 'Signing in…' : <><span>Sign In</span><ArrowRight size={14} /></>}
                       </button>
                     </form>
                   </div>
-
-                  <p style={{ fontSize: 10, color: '#C8D0DC', textAlign: 'center', marginTop: 14, fontFamily: 'ui-monospace, monospace' }}>
-                    Demo login — no password required
-                  </p>
                 </div>
               )}
             </div>
@@ -571,14 +430,8 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* ── Exit overlay — dark sweep covers screen before navigation ── */}
-      <div style={{
-        position: 'fixed', inset: 0, zIndex: 200,
-        background: '#0C0E14',
-        opacity: overlayIn ? 1 : 0,
-        pointerEvents: overlayIn ? 'all' : 'none',
-        transition: 'opacity 0.45s ease-in',
-      }} />
+      {/* ── Exit overlay ─────────────────────────────────────────────────────── */}
+      <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: '#0C0E14', opacity: overlayIn ? 1 : 0, pointerEvents: overlayIn ? 'all' : 'none', transition: 'opacity 0.45s ease-in' }} />
     </>
   );
 }

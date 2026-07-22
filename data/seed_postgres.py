@@ -8,7 +8,7 @@ Plans
   PLAN-004  The Prudential Employee Savings Plan (PESP)               (from SPD, 2023)
 
 Participants (4)
-  PART-006  Gabriel Stone   — PLAN-003 Capital One, age 61, HCE, near retirement
+  PART-006  Gabriel Stone   — PLAN-003 Capital One, age 62, HCE, active employee
   PART-007  Yuki Tanaka     — PLAN-004 Prudential, age 31, 1.5yr service, cliff not yet met
   PART-008  Amara Osei      — PLAN-003 Capital One, age 36, primary demo participant
   PART-009  Daniela Reyes   — PLAN-003 Capital One, age 41, existing $25k loan
@@ -286,14 +286,14 @@ def _ssn_hash(n: str) -> str:
 
 PARTICIPANTS = [
     {
-        # Capital One — age 61, HCE, near retirement, 27yr service
-        # Used for: catch-up / Roth SECURE 2.0 tests, in-service distribution (over 59½), RMD scenarios
+        # Capital One — age 62, HCE, active, 27yr service
+        # Used for: catch-up / Roth SECURE 2.0 tests, in-service distribution (over 59½)
         "participant_id": "PART-006",
         "plan_id": "PLAN-003",
         "ssn_hash": _ssn_hash("FAKE-SSN-006"),
         "first_name": "Gabriel",
         "last_name": "Stone",
-        "date_of_birth": "1964-04-15",           # age 61
+        "date_of_birth": "1964-04-15",           # age 62
         "date_of_hire": "1998-03-01",
         "eligibility_date": "1998-03-01",          # immediate eligibility on Capital One
         "employment_status": "active",
@@ -396,7 +396,8 @@ PARTICIPANTS = [
         ],
     },
     {
-        # Capital One — age 41, existing $25k loan, used for IRC § 72(p) cap math demo
+        # Capital One — age 41, terminated 2026-03-01, existing $25k loan
+        # Used for: IRC §72(p) cap math demo, separation distribution demo
         "participant_id": "PART-009",
         "plan_id": "PLAN-003",
         "ssn_hash": _ssn_hash("FAKE-SSN-009"),
@@ -405,8 +406,8 @@ PARTICIPANTS = [
         "date_of_birth": "1985-09-14",            # age 41
         "date_of_hire": "2014-04-01",
         "eligibility_date": "2014-04-01",
-        "employment_status": "active",
-        "termination_date": None,
+        "employment_status": "terminated",
+        "termination_date": "2026-03-01",
         "years_of_vesting_service": 10.0,
         "hours_of_service_ytd": 1600,
         "break_in_service": False,
@@ -819,7 +820,7 @@ def main():
         print("  PLAN-004  The Prudential Employee Savings Plan (PESP)")
         print()
         print("Participants:")
-        print("  PART-006  Gabriel Stone    — PLAN-003  $210k  age 61 / HCE / near retirement")
+        print("  PART-006  Gabriel Stone    — PLAN-003  $210k  age 62 / HCE / active employee")
         print("  PART-007  Yuki Tanaka      — PLAN-004   $38k  age 31 / 1.5yr service / cliff not met")
         print("  PART-008  Amara Osei       — PLAN-003   $85k  age 36 / primary demo participant")
         print("  PART-009  Daniela Reyes    — PLAN-003  $100k  age 41 / existing $25k loan")

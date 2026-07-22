@@ -30,7 +30,13 @@ from data.review_queue import (
 
 # Actions that disburse funds — sponsor approval moves them to awaiting_bank_details
 # instead of fully approved, so participant can provide bank details next.
-_DISBURSEMENT_ACTIONS = {"loan_initiation", "hardship_distribution", "in_service_distribution"}
+_DISBURSEMENT_ACTIONS = {
+    "loan_initiation",
+    "hardship_distribution",
+    "in_service_distribution",
+    "separation_distribution",
+    "rmd",
+}
 
 router = APIRouter()
 

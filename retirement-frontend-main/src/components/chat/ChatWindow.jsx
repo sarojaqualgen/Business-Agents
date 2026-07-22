@@ -8,6 +8,7 @@ import MessageBubble from './MessageBubble.jsx';
 import TypingIndicator from './TypingIndicator.jsx';
 import SuggestedPrompts from './SuggestedPrompts.jsx';
 import ConfirmationDialog from './ConfirmationDialog.jsx';
+import TaxAcknowledgmentCard from './TaxAcknowledgmentCard.jsx';
 import ChatInput from './ChatInput.jsx';
 import DocumentUploadCard from './DocumentUploadCard.jsx';
 import BankDetailsCard from './BankDetailsCard.jsx';
@@ -19,6 +20,7 @@ export default function ChatWindow() {
     pendingTransaction,
     pendingUpload,
     pendingBankDetails,
+    pendingTaxAck,
     isStreaming,
     isResolving,
     sendFastMessage,
@@ -28,6 +30,8 @@ export default function ChatWindow() {
     dismissUpload,
     submitBankDetails,
     dismissBankDetails,
+    acknowledgeTax,
+    cancelTaxAck,
   } = useChatStream();
 
   const location = useLocation();
@@ -57,7 +61,7 @@ export default function ChatWindow() {
   const showTypingIndicator =
     isStreaming && lastMessage?.role === 'assistant' && lastMessage.isStreaming && lastMessage.steps.length === 0;
 
-  const blocked = isStreaming || Boolean(pendingTransaction) || Boolean(pendingBankDetails);
+  const blocked = isStreaming || Boolean(pendingTransaction) || Boolean(pendingBankDetails) || Boolean(pendingTaxAck);
 
   return (
     <div className="flex flex-col h-[calc(100vh-140px)] card overflow-hidden">
@@ -118,6 +122,16 @@ export default function ChatWindow() {
                       transaction={pendingTransaction}
                       onConfirm={confirmTransaction}
                       onCancel={cancelTransaction}
+                      isResolving={isResolving}
+                    />
+                  </div>
+                )}
+                {/* Tax acknowledgment — shown when a distribution needs explicit tax disclosure */}
+                {!message.isStreaming && pendingTaxAck && idx === messages.length - 1 && (
+                  <div className="max-w-2xl ml-11 msg-enter">
+                    <TaxAcknowledgmentCard
+                      onConfirm={acknowledgeTax}
+                      onCancel={cancelTaxAck}
                       isResolving={isResolving}
                     />
                   </div>

@@ -40,7 +40,7 @@ const ACTIONS = [
     title: 'Hardship Withdrawal',
     description: 'Access funds early for an IRS-qualifying financial hardship.',
     tooltip: 'Withdraw funds for a qualifying safe-harbor expense — medical bills, eviction prevention, tuition, funeral costs, or disaster relief. Requires supporting documentation and plan sponsor review.',
-    to: '/participant/distributions',
+    to: '/participant/hardship',
   },
   {
     key: 'investment-reallocation',
@@ -72,9 +72,8 @@ const ACTIONS = [
     icon: <DistributionIcon />,
     title: 'Distribution',
     description: 'Request an in-service, separation, RMD, or QDRO distribution.',
-    tooltip: 'Distributions are subject to age, employment-status, and RMD rules under ERISA and the IRC, and may require plan sponsor approval before funds are released.',
+    tooltip: 'Covers four distribution types: In-Service (age 59½+, while employed), Separation (after leaving), RMD (mandatory age 73+), and QDRO (court-ordered). All are taxable events; each has different eligibility rules and review paths.',
     to: '/participant/distributions',
-    comingSoon: true,
   },
   {
     key: 'documents',

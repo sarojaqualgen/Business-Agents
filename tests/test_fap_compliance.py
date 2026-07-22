@@ -472,6 +472,34 @@ class TestRule06HardshipRules:
         assert not result.passed
         assert result.denial_code == DenialCode.hardship_not_permitted
 
+    def test_fails_hardship_when_terminated(self, participant, plan):
+        # Terminated employees must use separation_distribution, not hardship
+        participant.employment_status = "terminated"
+        result = rule_06_plan_rules(
+            participant, plan, ActionType.hardship_distribution,
+            {"qualifying_expense_type": "medical", "amount": "5000"}
+        )
+        assert not result.passed
+        assert result.denial_code == DenialCode.hardship_not_active_employee
+
+    def test_fails_hardship_when_retired(self, participant, plan):
+        participant.employment_status = "retired"
+        result = rule_06_plan_rules(
+            participant, plan, ActionType.hardship_distribution,
+            {"qualifying_expense_type": "medical", "amount": "5000"}
+        )
+        assert not result.passed
+        assert result.denial_code == DenialCode.hardship_not_active_employee
+
+    def test_passes_hardship_on_military_leave(self, participant, plan):
+        # on_leave / military_leave are still active employment statuses
+        participant.employment_status = "military_leave"
+        result = rule_06_plan_rules(
+            participant, plan, ActionType.hardship_distribution,
+            {"qualifying_expense_type": "medical", "amount": "5000"}
+        )
+        assert result.passed
+
 
 # ---------------------------------------------------------------------------
 # Rule 6 — In-Service Distribution
@@ -488,11 +516,28 @@ class TestRule06InServiceDistribution:
         assert result.denial_code == DenialCode.in_service_age_not_met
 
     def test_passes_in_service_at_61(self, near_retirement_participant, plan):
-        # Gabriel is 61 — over 59½
+        # Gabriel is 61 — over 59½, still active
         result = rule_06_plan_rules(
             near_retirement_participant, plan, ActionType.in_service_distribution, {}
         )
         assert result.passed
+
+    def test_fails_in_service_when_terminated(self, near_retirement_participant, plan):
+        # Even age 61+, terminated employees cannot take in-service distributions
+        near_retirement_participant.employment_status = "terminated"
+        result = rule_06_plan_rules(
+            near_retirement_participant, plan, ActionType.in_service_distribution, {}
+        )
+        assert not result.passed
+        assert result.denial_code == DenialCode.in_service_not_active_employee
+
+    def test_fails_in_service_when_retired(self, near_retirement_participant, plan):
+        near_retirement_participant.employment_status = "retired"
+        result = rule_06_plan_rules(
+            near_retirement_participant, plan, ActionType.in_service_distribution, {}
+        )
+        assert not result.passed
+        assert result.denial_code == DenialCode.in_service_not_active_employee
 
 
 # ---------------------------------------------------------------------------
@@ -731,10 +776,29 @@ class TestRule10PrudentExpert:
         assert result.passed
         assert not result.conditions
 
-    def test_passes_high_stakes_but_adds_condition(self):
-        result = rule_10_prudent_expert_loyalty(ActionType.hardship_distribution, {})
+    def test_fails_missing_taxable_acknowledgment(self):
+        for action in (
+            ActionType.hardship_distribution,
+            ActionType.in_service_distribution,
+            ActionType.separation_distribution,
+            ActionType.rmd,
+        ):
+            result = rule_10_prudent_expert_loyalty(action, {})
+            assert not result.passed, f"Expected denial for {action} without taxable_event_acknowledged"
+            assert result.denial_code == DenialCode.taxable_event_not_acknowledged
+
+    def test_passes_high_stakes_with_acknowledgment(self):
+        result = rule_10_prudent_expert_loyalty(
+            ActionType.hardship_distribution,
+            {"taxable_event_acknowledged": True},
+        )
         assert result.passed
         assert len(result.conditions) > 0
+
+    def test_passes_qdro_without_taxable_acknowledgment(self):
+        # QDRO and beneficiary_update are not taxable to the participant — no acknowledgment required.
+        result = rule_10_prudent_expert_loyalty(ActionType.qdro, {})
+        assert result.passed
 
 
 # ---------------------------------------------------------------------------
@@ -883,7 +947,7 @@ class TestRunComplianceCheckEndToEnd:
         assert result.autonomy_level == AutonomyLevel.full
 
     def test_hardship_routes_to_human_review(self, participant, plan):
-        """Valid hardship request approved at human_review autonomy."""
+        """Valid hardship request with taxable acknowledgment → human_review autonomy."""
         result = run_compliance_check(
             agent_id="AGENT-PARTICIPANT-001",
             principal_type=PrincipalType.participant,
@@ -894,13 +958,32 @@ class TestRunComplianceCheckEndToEnd:
                 "qualifying_expense_type": "medical",
                 "amount": "5000",
                 "documentation_refs": ["doc-001"],
+                "taxable_event_acknowledged": True,
             },
         )
         assert result.passed
         assert result.autonomy_level == AutonomyLevel.human_review
 
-    def test_early_withdrawal_blocked_without_exception(self, participant, plan):
-        """Pre-59½ separation distribution without exception → blocked at rule 7."""
+    def test_hardship_denied_without_taxable_acknowledgment(self, participant, plan):
+        """Hardship without taxable_event_acknowledged → denied at Rule 10."""
+        result = run_compliance_check(
+            agent_id="AGENT-PARTICIPANT-001",
+            principal_type=PrincipalType.participant,
+            participant=participant,
+            plan=plan,
+            action=ActionType.hardship_distribution,
+            payload={
+                "qualifying_expense_type": "medical",
+                "amount": "5000",
+            },
+        )
+        assert not result.passed
+        assert result.denial_code == DenialCode.taxable_event_not_acknowledged
+        assert result.rule_number == 10
+
+    def test_separation_pre_59_5_approved_with_penalty_condition(self, participant, plan):
+        """Pre-59½ separation distribution: approved (plan cannot withhold vested funds),
+        but Rule 7 adds a condition noting the 10% IRC §72(t) penalty for the reviewer."""
         participant.employment_status = "terminated"
         result = run_compliance_check(
             agent_id="AGENT-PARTICIPANT-001",
@@ -908,11 +991,13 @@ class TestRunComplianceCheckEndToEnd:
             participant=participant,
             plan=plan,
             action=ActionType.separation_distribution,
-            payload={"rollover_402f_notice_confirmed": True},
+            payload={
+                "rollover_402f_notice_confirmed": True,
+                "taxable_event_acknowledged": True,
+            },
         )
-        assert not result.passed
-        assert result.denial_code == DenialCode.early_withdrawal_penalty_applies
-        assert result.rule_number == 7
+        assert result.passed
+        assert any("10%" in c or "72(t)" in c for c in (result.conditions or []))
 
     def test_address_update_end_to_end_approved(self, participant, plan):
         result = run_compliance_check(

@@ -4,19 +4,45 @@
 
 ---
 
+## Login Credentials
+
+**Password for every account: `Demo2026!`**
+
+### Participants
+
+| Username | Password | Name | Plan | Participant ID |
+|---|---|---|---|---|
+| `gabriel.stone` | `Demo2026!` | Gabriel Stone | PLAN-003 (Capital One) | PART-006 |
+| `amara.osei` | `Demo2026!` | Amara Osei | PLAN-003 (Capital One) | PART-008 |
+| `daniela.reyes` | `Demo2026!` | Daniela Reyes | PLAN-003 (Capital One) | PART-009 |
+| `yuki.tanaka` | `Demo2026!` | Yuki Tanaka | PLAN-004 (Prudential) | PART-007 |
+
+### Plan Sponsors
+
+| Username | Password | Role | Plan |
+|---|---|---|---|
+| `admin.capitalone` | `Demo2026!` | Plan Sponsor | PLAN-003 (Capital One) |
+| `admin.prudential` | `Demo2026!` | Plan Sponsor | PLAN-004 (Prudential) |
+
+> Participants login → `/participant` dashboard. Plan sponsors login → `/sponsor` dashboard.
+
+---
+
 ## Reference: Participants
 
 | ID | Name | Age | Status | Vested | Total | Deferral | Active Loans | Loan Headroom | Plan |
 |---|---|---|---|---|---|---|---|---|---|
-| PART-006 | Gabriel Stone | 62.3 | active | $200,000 | $225,000 | 10% | 1 ($10k outstanding) | **$40,000** | PLAN-003 |
+| PART-006 | Gabriel Stone | 62.2 | active | $210,000 | $225,000 | 10% | 0 | **$50,000** | PLAN-003 |
 | PART-007 | Yuki Tanaka | 31.6 | active | $38,000 | $42,000 | 4% | 0 | **$19,000** | PLAN-004 |
 | PART-008 | Amara Osei | 36.4 | active | $85,000 | $92,000 | 6% | 0 | **$42,500** | PLAN-003 |
-| PART-009 | Daniela Reyes | 40.8 | active | $100,000 | $105,000 | 8% | 1 ($22k outstanding, highest $25k) | **$25,000** | PLAN-003 |
+| PART-009 | Daniela Reyes | 40.8 | **terminated** (2026-03-01) | $100,000 | $105,000 | 8% | 1 ($22k outstanding, highest $25k) | **$25,000** | PLAN-003 |
 
-Login: participant ID as username, last name as password (e.g. `PART-008` / `Osei`).
+- **Gabriel** — only participant who qualifies for in-service (age 62 ≥ 59½, active)
+- **Daniela** — terminated; use for separation distribution happy path, and to show in-service/hardship correctly denied for ex-employees
+- No participant ≥ 73 → RMD always denied
 
 **Loan headroom formula (IRC §72(p)):** `min( $50,000 − highest loan balance last 12 months, 50% of vested balance )`
-- Gabriel: min($50k − $10k, $100k) = **$40k**
+- Gabriel: min($50k − $0, $105k) = **$50k** ← no prior loans; $50k absolute cap is binding
 - Yuki: min($50k − $0, $19k) = **$19k** ← 50% vested is the binding cap
 - Amara: min($50k − $0, $42.5k) = **$42.5k** ← 50% vested is the binding cap
 - Daniela: min($50k − $25k, $50k) = **$25k** ← highest-balance cap
@@ -118,12 +144,12 @@ Turn 4: "general"
 ---
 
 ### 1f. Denial — exceeds §72(p) cap (Gabriel)
-**Login:** Gabriel Stone (PART-006) — headroom is $40k
+**Login:** Gabriel Stone (PART-006) — headroom is $50k (no prior loans; $50k absolute cap is binding)
 ```
-"I need $45,000 loan for general purpose, 5 years"
+"I need $55,000 loan for general purpose, 5 years"
 ```
 Expected: FAP Rule 6 denies `LOAN_CAP_EXCEEDED`.
-Message: "The maximum you can borrow is $40,000 based on your current loan balance and IRC §72(p) limits."
+Message: "The maximum you can borrow is $50,000 based on the IRC §72(p) limit."
 
 ---
 
@@ -207,8 +233,21 @@ Upload: `funeral_invoice.txt` → verify name matches.
 
 ---
 
-### 2e. Denial — invalid expense type passes through, FAP rejects
-**Login:** Any participant
+### 2e. Denial — Daniela (terminated — hardship requires active employment)
+**Login:** Daniela Reyes (PART-009) — `employment_status = terminated`
+```
+"I need $4,000 for medical bills"
+"Hardship withdrawal for $3,000 — eviction prevention"
+```
+Expected: FAP denies `HARDSHIP_NOT_ACTIVE_EMPLOYEE`.
+Message: "Hardship distributions are only available to active employees. Former employees should request a separation distribution instead."
+
+> Daniela's correct path is a separation distribution, not a hardship.
+
+---
+
+### 2f. Denial — invalid expense type passes through, FAP rejects
+**Login:** Any **active** participant (Amara, Gabriel, Yuki)
 ```
 "I need $3,000 for a vacation"
 "I need $1,000 for car repairs"
@@ -220,7 +259,7 @@ Haiku explains the 7 valid IRS categories.
 
 ---
 
-### 2f. Multi-turn — missing amount
+### 2g. Multi-turn — missing amount
 **Login:** Amara Osei (PART-008)
 ```
 Turn 1: "I need a hardship withdrawal"
@@ -235,7 +274,7 @@ Turn 3: "$3,000 for medical"
 
 ---
 
-### 2g. Wrong document — name mismatch (cross-account)
+### 2h. Wrong document — name mismatch (cross-account)
 **Login:** Gabriel Stone (PART-006)
 ```
 "I need $3,000 for medical bills"
@@ -247,7 +286,7 @@ Correct upload: `gabriel_medical_bill.pdf` (named Gabriel Stone) → `verified=t
 
 ---
 
-### 2h. Sponsor approval flow
+### 2i. Sponsor approval flow
 1. Login as plan_sponsor (PLAN-003)
 2. Review Queue → find hardship entry
 3. View entry docs → confirm `verified=true`
@@ -295,7 +334,7 @@ Expected: FAP approves → `supervised` (below normal threshold). Confirm requir
 ---
 
 ### 3d. Catch-up contribution — Gabriel (age 60–63, SECURE 2.0)
-**Login:** Gabriel Stone (PART-006) — age 62.3, qualifies for enhanced catch-up
+**Login:** Gabriel Stone (PART-006) — age 62.2, qualifies for enhanced catch-up (IRC §414(v) 60–63 bracket)
 ```
 "I want to maximize my catch-up contributions"
 "Set my deferral to 15% with catch-up enabled"
@@ -370,10 +409,11 @@ Expected: data question → returns PLAN-003 or PLAN-004 fund lineup.
 **Autonomy: `human_review`** — queued for sponsor, no document upload required
 **FAP Rule:** Rule 6 (`_check_in_service_rules`) — age ≥ 59.5 AND plan must allow it
 PLAN-003 and PLAN-004 both allow in-service at 59½.
+**Bank details:** After sponsor approves, entry status → `approved_awaiting_bank_details`. Participant's Activity page auto-shows bank details form. Participant enters routing + account → `POST /transactions/disburse` (with `entry_id`) → funds disburse.
 
 ---
 
-### 5a. Happy path — Gabriel (age 62.3, qualifies)
+### 5a. Happy path — Gabriel (age 62.2, active, qualifies)
 **Login:** Gabriel Stone (PART-006)
 ```
 "I'd like to take $10,000 out of my account while I'm still working"
@@ -381,101 +421,163 @@ PLAN-003 and PLAN-004 both allow in-service at 59½.
 "I'm 62 and want to withdraw some money while employed"
 "Take $15,000 from my 401k — I'm still working"
 ```
-Expected: FAP approves (age 62.3 ≥ 59.5, plan allows) → `human_review` → queued.
-Sponsor approves (no doc required) → participant provides bank details → disburse.
+Expected: TaxAcknowledgmentCard → "Yes, I Acknowledge" → FAP approves (age 62.2 ≥ 59.5, plan allows) → `human_review` → queued.
+Sponsor approves (no doc required) → `approved_awaiting_bank_details` → Gabriel's Activity page shows bank form → disburse.
 
 ---
 
-### 5b. Denial — Amara (age 36.4, too young)
+### 5b. Proactive redirect — Amara (age 36.4, too young)
 **Login:** Amara Osei (PART-008)
 ```
 "I want to take $5,000 out while I'm still employed"
 "In-service withdrawal of $10,000"
 "I want to withdraw money from my 401k while I'm working"
 ```
-Expected: FAP Rule 6 denies `IN_SERVICE_AGE_NOT_MET`.
-Message: "In-service distributions require age 59½. Your current age is 36.4."
+Expected: **proactive check fires before FAP** — backend detects age 36.4 < 59.5 and responds immediately.
+Message: "In-service distributions require age 59½ under IRC §401(a)(36). At 36.4, you don't yet meet this requirement. A 401k loan may be an option while still employed."
 
 ---
 
-### 5c. Denial — Yuki (age 31.6, too young)
+### 5c. Proactive redirect — Yuki (age 31.6, too young)
 **Login:** Yuki Tanaka (PART-007)
 ```
 "I want an in-service withdrawal of $3,000"
 "Take $5,000 from my plan while I'm working"
 ```
-Expected: FAP denies `IN_SERVICE_AGE_NOT_MET`. Age 31.6, need 59.5.
+Expected: proactive check fires before FAP — age 31.6 < 59.5.
 
 ---
 
-### 5d. Denial — Daniela (age 40.8, too young)
-**Login:** Daniela Reyes (PART-009)
+### 5d. Proactive redirect — Daniela (terminated — redirect to separation_distribution)
+**Login:** Daniela Reyes (PART-009) — `employment_status = terminated`
 ```
 "I want to withdraw $8,000 in-service"
+"I want an in-service distribution of $10,000"
 ```
-Expected: FAP denies `IN_SERVICE_AGE_NOT_MET`. Age 40.8, need 59.5.
+Expected: **proactive check fires before FAP** — backend detects terminated status and explains they should request a separation distribution instead. No FAP call is made.
 
-> **Demo tip:** Gabriel is the only participant who passes. Use Amara for the denial side-by-side comparison.
+> Note: The proactive context check (employment_status=terminated + intent=in_service) fires before the classifier result reaches FAP, so the participant gets a helpful redirect immediately rather than a raw FAP denial code.
+
+> **Demo tip:** Use Gabriel for the pass, Amara for the age redirect, Daniela to show the employment-status redirect — three outcomes demonstrating the participant context system.
 
 ---
 
 ## 6. Separation Distribution
 
-**Autonomy: `human_review`** — BUT requires `employment_status = terminated or retired`
+**Autonomy: `human_review`** — requires `employment_status = terminated or retired`
 **FAP Rule:** Rule 6 (`_check_separation_rules`)
-
-All demo participants have `employment_status = active` → **always denied with current data.**
+**Portal auto-injects:** `rollover_402f_notice_confirmed=True` (IRC §402(f) — plan-admin obligation, not participant-entered)
+**Bank details:** After sponsor approves, entry status flips to `approved_awaiting_bank_details`. Participant's Activity page detects this and shows the bank details form inline. Participant submits routing number + account number → `POST /transactions/disburse` (with `entry_id`) → funds disburse.
 
 ---
 
-### 6a. Denial — all participants are active employees
-**Login:** Any participant
+### 6a. Happy path — Daniela (terminated 2026-03-01, age 41)
+**Login:** Daniela Reyes (PART-009)
+```
+"I left my job last month and want to withdraw $30,000"
+"Separation distribution of $50,000 — I'm no longer employed"
+"I quit, I want to take my full vested balance out"
+"I was terminated last month — I want a distribution of $40,000"
+```
+Expected: TaxAcknowledgmentCard → "Yes, I Acknowledge" → FAP passes (terminated, rollover notice auto-injected) → `human_review` → queued.
+Note: Daniela is 41, under 59½ — the 10% early withdrawal penalty (IRC §72(t)) applies unless she rolls it over.
+
+**Sponsor approval + bank details (end-to-end):**
+1. Login as `admin.capitalone` (PLAN-003)
+2. Review Queue → find Daniela's separation entry → Approve
+3. Status changes to `approved_awaiting_bank_details`
+4. Daniela logs back in → Activity page auto-opens bank details form
+5. Daniela enters routing number (9 digits) + account number + account type → Submit
+6. `POST /transactions/disburse` (with `entry_id`) → funds disburse
+
+---
+
+### 6b. Multi-turn — missing amount
+**Login:** Daniela Reyes (PART-009)
+```
+Turn 1: "I want a separation distribution"
+         → "How much would you like to withdraw?"
+Turn 2: "$25,000"
+         → TaxAcknowledgmentCard
+Turn 3: "Yes I acknowledge"
+         → FAP runs → human_review → queued
+```
+
+---
+
+### 6c. Proactive redirect — active employees (Gabriel, Amara, Yuki)
+**Login:** Gabriel Stone / Amara Osei / Yuki Tanaka — all `active`
 ```
 "I left my job and want to take $20,000 out"
-"I retired — I want my separation distribution of $50,000"
 "I quit last month, can I withdraw $30,000?"
-"I'm terminating employment and want my full balance"
 ```
-Expected: FAP Rule 6 denies `SEPARATION_STATUS_INVALID`.
-Message: "Separation distributions require employment status of 'terminated' or 'retired'. Current status: 'active'."
+Expected: **proactive check fires before FAP** — backend detects employment_status=active and responds immediately.
+Message: "Separation distributions are only available to participants who have permanently left their employer. Based on plan records, you are still an active employee. While still working, alternatives include a 401k loan or, if age 59½ or older, an in-service distribution."
 
-> **What this demonstrates:** The compliance engine blocks distributions that participants cannot legally take yet. When the recordkeeper updates employment_status to 'terminated' after an actual separation, FAP automatically unblocks. Additionally, FAP requires `rollover_402f_notice_confirmed=True` (IRC §402 rollover notice must be sent 30–180 days before distribution) — even for terminated employees, this notice step must happen first.
+> **What this demonstrates:** The participant context system catches the ineligibility before FAP is called, giving a clear, actionable message. Once the recordkeeper's nightly SFTP feed updates employment_status to 'terminated', the same request flows through to FAP and queues automatically — no code change needed.
 
 ---
 
 ## 7. RMD (Required Minimum Distribution)
 
-**Autonomy: `human_review`** — BUT requires `rmd_required = True` on participant record
-**FAP Rule:** Rule 6 (`_check_rmd_rules`) — also requires `rmd_notice_issued=True` in payload
+**Autonomy: `human_review`** — queued for sponsor
+**FAP Rule:** Rule 6 (`_check_rmd_rules`) — requires `rmd_required=True` on participant record
+**Portal auto-injects:** `rmd_notice_issued=True` — plan sends the IRC §401(a)(9) notice by January 31; participant does not enter this
+**Amount auto-filled:** If participant says "process my RMD" without specifying an amount, the portal uses `rmd_amount_current_year` from their record (IRS Uniform Lifetime Table calculation)
 
-No demo participant has reached age 73 → **always denied with current data.**
-Gabriel is closest: DOB 1964-04-15, will reach RMD age in 2037.
+> **Demo status:** No participant is age 73+ — all RMD transaction attempts will be intercepted by the **proactive context check** (`rmd_required=False`) before FAP is called. This is the correct, realistic behavior. When the recordkeeper feed updates `rmd_required=True` for a participant, the flow passes through to FAP automatically — no code change needed. Gabriel is closest at age 62.2 (reaches 73 in 2037).
 
 ---
 
-### 7a. Denial — not yet required (all participants)
-**Login:** Any participant
+### 7a. Proactive redirect — not yet required (all participants)
+**Login:** Any participant (Gabriel recommended — closest to 73 at age 62.2)
 ```
 "I need to take my RMD this year"
 "Process my required minimum distribution"
 "I have to take money out — mandatory withdrawal"
 "What is my RMD amount?"
 ```
-Expected: FAP Rule 6 denies `RMD_NOT_YET_REQUIRED`.
-Message: "Participant has not yet reached the required minimum distribution age."
+Expected: **proactive context check fires before FAP** — `rmd_required=False` on the participant record → Haiku explains RMDs haven't started yet.
+Message: "Required Minimum Distributions begin at age 73 under SECURE 2.0 (IRC §401(a)(9)). Based on your account, you have not yet reached that threshold. You'll receive a notice when your first RMD becomes due."
 
-> **What this demonstrates:** FAP prevents participants from processing an RMD before age 73 — protecting them from unnecessary taxation.
+> **Compliance demonstration:** The proactive check catches this before FAP is called. The 25% IRS excise tax on missed RMDs (IRC §4974) is the risk being guarded — the system ensures RMDs don't process prematurely and don't get missed once required.
 
 ---
 
-### 7b. Chat data question — RMD info
+### 7b. What happens when rmd_required=True (future / real participant)
+
+When a participant's `rmd_required=True` and `rmd_amount_current_year` is set in the DB:
+
+```
+"Process my required minimum distribution"
+→ TaxAcknowledgmentCard (RMD is a taxable event, 25% excise tax if missed)
+→ "Yes, I Acknowledge"
+→ FAP runs:  rmd_required=True ✓  rmd_notice_issued auto-injected ✓
+             amount auto-filled from rmd_amount_current_year ✓
+→ human_review → queued for sponsor
+→ Sponsor approves → status = approved_awaiting_bank_details
+→ Participant's Activity page shows bank details form
+→ Participant enters routing + account → POST /transactions/disburse → funds disburse
+```
+
+If participant requests less than the minimum:
+```
+"I only want to take $500 this year for my RMD"
+→ FAP Rule 6 denies RMD_AMOUNT_INSUFFICIENT
+Message: "RMD of $500 is below the required $X,XXX for the current plan year."
+```
+
+---
+
+### 7c. Chat data question — RMD info (works for all participants)
 **Login:** Any participant
 ```
 "When do I have to start taking RMDs?"
 "Tell me about required minimum distributions"
 "What is the RMD age?"
+"How is my RMD calculated?"
 ```
-Expected: data question, not a transaction → Haiku explains RMD rules (age 73, IRC §401(a)(9)).
+Expected: data question, not a transaction → Haiku explains RMD rules (age 73, IRC §401(a)(9), SECURE 2.0, IRS Uniform Lifetime Table).
 
 ---
 
@@ -621,7 +723,7 @@ Expected: returns `total_balance`, `vested_balance`, `vesting_percentage`.
 ```
 Expected: returns `max_additional_loan_amount` with §72(p) explanation.
 - Amara: $42,500
-- Gabriel: $40,000
+- Gabriel: $50,000
 - Daniela: $25,000
 - Yuki: $19,000
 
@@ -857,39 +959,63 @@ FAP Rule 6 denies `HARDSHIP_EXPENSE_NOT_QUALIFIED`. Compliance engine working.
 
 ### Step 9 — Switch to Gabriel Stone (PART-006)
 
-### Step 10 — In-service distribution (passes — age 62.3)
+### Step 10 — In-service distribution (passes — age 62.2, active)
 ```
 "I'd like to take $10,000 out while I'm still working"
 ```
-FAP approves (age ≥ 59.5, plan allows) → `human_review` → queued.
+TaxAcknowledgmentCard → "Yes, I Acknowledge" → FAP approves (age ≥ 59.5, plan allows) → `human_review` → queued.
 
-### Step 11 — Show denial — Gabriel tries RMD (not yet required)
+### Step 11 — Show proactive redirect — Gabriel tries separation (still active)
+```
+"I retired last month and want my separation distribution"
+```
+Proactive context check fires: Gabriel's `employment_status=active` → explains separation distributions require leaving the employer, suggests loan or in-service instead. No FAP call made.
+
+### Step 12 — Show proactive redirect — Gabriel tries RMD (rmd_required=False)
 ```
 "I need to take my required minimum distribution"
 ```
-FAP Rule 6 denies `RMD_NOT_YET_REQUIRED`. Gabriel is 62 — RMD starts at 73.
+Proactive context check fires: `rmd_required=False` → explains RMDs begin at 73, Gabriel is 62 — not yet required. No FAP call made.
 
-### Step 12 — Show denial — Amara tries in-service (too young)
-**Switch back to Amara**
+### Step 13 — Show denial — Amara tries in-service (too young)
+**Switch to Amara**
 ```
 "I want to take $5,000 out while I'm still working"
 ```
 FAP Rule 6 denies `IN_SERVICE_AGE_NOT_MET`. Age 36.4 < 59.5.
 
-### Step 13 — Login as plan_sponsor (PLAN-003)
+### Step 13b — Switch to Daniela Reyes (PART-009) — terminated
 
-### Step 14 — Review queue
-Five entries: Amara's hardship, QDRO, beneficiary + Gabriel's in-service.
+### Step 13c — Separation distribution (passes — terminated)
+```
+"I left my job last month and want to withdraw $30,000"
+```
+TaxAcknowledgmentCard → "Yes, I Acknowledge" → FAP passes → `human_review` → queued.
 
-### Step 15 — Approve Amara's hardship
+### Step 13d — Daniela tries hardship (denied — no longer active)
+```
+"I need $3,000 for medical bills"
+```
+FAP denies `HARDSHIP_NOT_ACTIVE_EMPLOYEE`. "Former employees should request a separation distribution instead."
+
+### Step 14 — Login as plan_sponsor (PLAN-003)
+
+### Step 15 — Review queue
+Entries: Amara's hardship, QDRO, beneficiary + Gabriel's in-service + Daniela's separation.
+
+### Step 16 — Approve Amara's hardship
 Docs tab → `verified=true` → Approve docs → Approve entry.
-Amara gets notified → provides bank details → disburse.
 
-### Step 16 — Approve Gabriel's in-service distribution
-No doc required → Approve directly.
+### Step 17 — Approve Gabriel's in-service + Daniela's separation
+No documents required for either → Approve directly.
+Both entries → `approved_awaiting_bank_details`.
 
-### Step 17 — Deny Amara's QDRO
+### Step 18 — Participants provide bank details
+- Login as `gabriel.stone` → Activity page → "Provide Bank Details" button auto-shown → enter routing + account → Submit → disbursed.
+- Login as `daniela.reyes` → Activity page → same flow.
+
+### Step 19 — Deny Amara's QDRO
 Enter note: "Awaiting certified court filing — resubmit with stamped order."
 
-### Step 18 — Audit log
+### Step 20 — Audit log
 Show full compliance trail — every FAP decision with ERISA citation, timestamp, and result.
