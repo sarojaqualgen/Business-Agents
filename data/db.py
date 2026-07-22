@@ -693,10 +693,10 @@ def get_participant_transactions(participant_id: str) -> list[dict]:
             cur.execute(
                 """
                 SELECT transaction_id, action, amount, autonomy_level,
-                       queue_entry_id, created_at
+                       queue_entry_id, executed_at
                 FROM transactions
                 WHERE participant_id = %s
-                ORDER BY created_at DESC
+                ORDER BY executed_at DESC
                 LIMIT 100
                 """,
                 (participant_id,),
@@ -709,7 +709,7 @@ def get_participant_transactions(participant_id: str) -> list[dict]:
                     "amount":         float(r["amount"]) if r["amount"] is not None else None,
                     "autonomy_level": r["autonomy_level"],
                     "queue_entry_id": r["queue_entry_id"],
-                    "timestamp":      r["created_at"].isoformat() if r["created_at"] else None,
+                    "timestamp":      r["executed_at"].isoformat() if r["executed_at"] else None,
                 }
                 for r in cur.fetchall()
             ]
@@ -763,6 +763,49 @@ def decrement_vested_balance(participant_id: str, amount: Decimal) -> None:
             """,
             (amount, amount, participant_id),
         )
+
+
+def get_rmd_ytd(participant_id: str, year: int) -> Decimal:
+    """
+    Total RMD amounts already taken or pending for a participant in the given calendar year.
+    Counts completed transactions AND active queue entries (pending / awaiting bank details)
+    so a second submission is blocked even while the first is still awaiting sponsor approval.
+    Returns Decimal("0") on any DB error so the gate degrades gracefully.
+    """
+    total = Decimal("0")
+    try:
+        with _conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(amount), 0)
+                FROM transactions
+                WHERE participant_id = %s
+                  AND action = 'rmd'
+                  AND EXTRACT(YEAR FROM executed_at) = %s
+                """,
+                (participant_id, year),
+            )
+            row = cur.fetchone()
+            if row:
+                total += Decimal(str(row[0]))
+            cur.execute(
+                """
+                SELECT COALESCE(SUM((payload->>'amount')::numeric), 0)
+                FROM review_queue
+                WHERE participant_id = %s
+                  AND action = 'rmd'
+                  AND status IN ('pending', 'approved_awaiting_bank_details')
+                  AND EXTRACT(YEAR FROM created_at) = %s
+                """,
+                (participant_id, year),
+            )
+            row = cur.fetchone()
+            if row:
+                total += Decimal(str(row[0]))
+    except Exception:
+        pass
+    return total
 
 
 def create_loan_record(
@@ -1011,6 +1054,203 @@ def get_audit_record_db(audit_id: str) -> Optional[dict]:
         cur.execute("SELECT * FROM fap_audit_log WHERE audit_id = %s", (audit_id,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def get_plan_participants(plan_id: str) -> list[dict]:
+    """Return a summary row for every participant in a plan, for the admin Participants page."""
+    with _conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT participant_id, first_name, last_name, employment_status,
+                   vested_balance, total_balance, current_deferral_pct,
+                   rmd_required, date_of_hire
+            FROM participants
+            WHERE plan_id = %s
+            ORDER BY last_name, first_name
+            """,
+            (plan_id,),
+        )
+        return [
+            {
+                "participant_id":     r["participant_id"],
+                "name":               f"{r['first_name']} {r['last_name']}",
+                "employment_status":  r["employment_status"],
+                "vested_balance":     float(r["vested_balance"]),
+                "total_balance":      float(r["total_balance"]),
+                "current_deferral_pct": float(r["current_deferral_pct"]),
+                "rmd_required":       r["rmd_required"],
+                "date_of_hire":       str(r["date_of_hire"]),
+            }
+            for r in cur.fetchall()
+        ]
+
+
+def get_participant_activity(participant_id: str) -> list[dict]:
+    """Return a combined, time-sorted activity log for a participant.
+
+    Merges: executed transactions, active/paid loans, and FAP audit records
+    (both approved and denied) into a single list, newest first.
+    """
+    events: list[dict] = []
+
+    # Executed transactions (deferral changes, rebalances, address updates, disbursements)
+    events.extend(get_participant_transactions(participant_id))
+
+    # All loans
+    events.extend(get_participant_loans(participant_id))
+
+    # FAP audit log — approved AND denied (left-join review_queue for amount on queued decisions)
+    try:
+        with _conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT f.audit_id, f.created_at, f.action, f.outcome,
+                       f.autonomy_level, f.denial_code, f.erisa_citation,
+                       (rq.payload->>'amount')::numeric AS queued_amount,
+                       rq.status AS queue_status
+                FROM fap_audit_log f
+                LEFT JOIN review_queue rq ON rq.fap_audit_id = f.audit_id::text
+                WHERE f.participant_id = %s
+                ORDER BY f.created_at DESC
+                LIMIT 200
+                """,
+                (participant_id,),
+            )
+            for r in cur.fetchall():
+                events.append({
+                    "id":             str(r["audit_id"]),
+                    "type":           "fap_decision",
+                    "action":         r["action"],
+                    "authorized":     r["outcome"] == "approved",
+                    "autonomy_level": r["autonomy_level"],
+                    "denial_code":    r["denial_code"],
+                    "erisa_citation": r["erisa_citation"],
+                    "amount":         float(r["queued_amount"]) if r["queued_amount"] is not None else None,
+                    "queue_status":   r["queue_status"],
+                    "timestamp":      r["created_at"].isoformat() if r["created_at"] else None,
+                })
+    except Exception:
+        pass
+
+    # Sort all events newest first
+    def _ts(e: dict) -> str:
+        return e.get("timestamp") or ""
+
+    events.sort(key=_ts, reverse=True)
+    return events
+
+
+def get_plan_activity(plan_id: str, limit: int = 500) -> list[dict]:
+    """Return a combined, time-sorted activity feed for ALL participants in a plan.
+
+    Merges FAP audit decisions, executed transactions, and loans into one list,
+    newest first. Each event includes participant_id and participant name so the
+    administrator can see who did what.
+    """
+    events: list[dict] = []
+
+    with _conn() as conn:
+        cur = conn.cursor()
+
+        # Name lookup for all participants in the plan
+        cur.execute(
+            "SELECT participant_id, first_name, last_name FROM participants WHERE plan_id = %s",
+            (plan_id,),
+        )
+        names = {r["participant_id"]: f"{r['first_name']} {r['last_name']}" for r in cur.fetchall()}
+
+        # FAP audit log — all decisions for this plan (left-join review_queue to get amount + status)
+        cur.execute(
+            """
+            SELECT f.audit_id, f.created_at, f.participant_id, f.action, f.outcome,
+                   f.autonomy_level, f.denial_code, f.erisa_citation,
+                   (rq.payload->>'amount')::numeric AS queued_amount,
+                   rq.status AS queue_status
+            FROM fap_audit_log f
+            LEFT JOIN review_queue rq ON rq.fap_audit_id = f.audit_id::text
+            WHERE f.plan_id = %s
+            ORDER BY f.created_at DESC
+            LIMIT %s
+            """,
+            (plan_id, limit),
+        )
+        for r in cur.fetchall():
+            pid = r["participant_id"]
+            events.append({
+                "id":               str(r["audit_id"]),
+                "type":             "fap_decision",
+                "participant_id":   pid,
+                "participant_name": names.get(pid, pid),
+                "action":           r["action"],
+                "authorized":       r["outcome"] == "approved",
+                "autonomy_level":   r["autonomy_level"],
+                "denial_code":      r["denial_code"],
+                "erisa_citation":   r["erisa_citation"],
+                "amount":           float(r["queued_amount"]) if r["queued_amount"] is not None else None,
+                "queue_status":     r["queue_status"],
+                "timestamp":        r["created_at"].isoformat() if r["created_at"] else None,
+            })
+
+        # Executed transactions
+        cur.execute(
+            """
+            SELECT transaction_id, executed_at, participant_id, action, amount, autonomy_level
+            FROM transactions
+            WHERE plan_id = %s
+            ORDER BY executed_at DESC
+            LIMIT %s
+            """,
+            (plan_id, limit),
+        )
+        for r in cur.fetchall():
+            pid = r["participant_id"]
+            events.append({
+                "id":              str(r["transaction_id"]),
+                "type":            "executed",
+                "participant_id":  pid,
+                "participant_name": names.get(pid, pid),
+                "action":          r["action"],
+                "authorized":      True,
+                "autonomy_level":  r["autonomy_level"],
+                "denial_code":     None,
+                "erisa_citation":  None,
+                "amount":          float(r["amount"]) if r["amount"] is not None else None,
+                "timestamp":       r["executed_at"].isoformat() if r["executed_at"] else None,
+            })
+
+        # Loans — show all loans including the seeded one so admin sees active loan history
+        cur.execute(
+            """
+            SELECT loan_id, origination_date, participant_id,
+                   original_amount, outstanding_balance, status
+            FROM participant_loans
+            WHERE plan_id = %s
+            ORDER BY origination_date DESC
+            LIMIT %s
+            """,
+            (plan_id, limit),
+        )
+        for r in cur.fetchall():
+            pid = r["participant_id"]
+            events.append({
+                "id":              str(r["loan_id"]),
+                "type":            "loan",
+                "participant_id":  pid,
+                "participant_name": names.get(pid, pid),
+                "action":          "loan_initiation",
+                "authorized":      True,
+                "autonomy_level":  "supervised",
+                "denial_code":     None,
+                "erisa_citation":  None,
+                "amount":          float(r["original_amount"]) if r["original_amount"] is not None else None,
+                "note":            f"Outstanding: ${float(r['outstanding_balance']):,.0f}" if r["outstanding_balance"] else None,
+                "timestamp":       r["origination_date"].isoformat() if r["origination_date"] else None,
+            })
+
+    events.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
+    return events[:limit]
 
 
 def update_investment_elections(participant_id: str, plan_id: str, elections: list[dict]) -> None:

@@ -63,6 +63,10 @@ export const apiClient = {
     return request(`/queue/${entryId}/deny`, { method: 'POST', body: { note }, auth: true });
   },
 
+  async cancelQueueEntry(entryId) {
+    return request(`/queue/${entryId}/cancel`, { method: 'POST', body: {}, auth: true });
+  },
+
   async getQueueEntryDocs(entryId) {
     return request(`/queue/${entryId}/docs`, { auth: true });
   },
@@ -97,6 +101,18 @@ export const apiClient = {
 
   async getParticipantDocuments() {
     return request('/documents/participant', { auth: true });
+  },
+
+  async getAdminPlanActivity() {
+    return request('/admin/activity', { auth: true });
+  },
+
+  async getAdminParticipants() {
+    return request('/admin/participants', { auth: true });
+  },
+
+  async getAdminParticipantActivity(participantId) {
+    return request(`/admin/participants/${participantId}/activity`, { auth: true });
   },
 
   async resetDemo() {

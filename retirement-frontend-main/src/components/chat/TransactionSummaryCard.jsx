@@ -4,7 +4,7 @@ import TransactionTypeIcon from './trace/TransactionTypeIcon.jsx';
 
 const STATUS_STYLES = {
   pending_confirmation: { label: 'Awaiting Confirmation', className: 'text-warning' },
-  pending_review: { label: 'Pending Sponsor Review', className: 'text-purple' },
+  pending_review: { label: 'Pending Administrator Review', className: 'text-purple' },
   executed: { label: 'Executed', className: 'text-success' },
   cancelled: { label: 'Cancelled', className: 'text-text-faint' },
 };

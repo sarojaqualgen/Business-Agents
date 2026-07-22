@@ -52,6 +52,14 @@ _CREDS: dict[str, dict] = {
         "plan_id":        "PLAN-004",
         "display_name":   "Yuki Tanaka",
     },
+    # ── Participant (Capital One PLAN-003) — RMD demo ──────────────────────
+    "eleanor.walsh": {
+        "hash":           _DEMO_HASH,
+        "principal_type": "participant",
+        "participant_id": "PART-010",
+        "plan_id":        "PLAN-003",
+        "display_name":   "Eleanor Walsh",
+    },
     # ── Plan sponsors ───────────────────────────────────────────────────────
     "admin.capitalone": {
         "hash":           _DEMO_HASH,

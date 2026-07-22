@@ -18,6 +18,8 @@ const PARTICIPANT_NAV = [
 const SPONSOR_NAV = [
   { to: '/sponsor', label: 'Overview', end: true },
   { to: '/sponsor/queue', label: 'Review Queue' },
+  { to: '/sponsor/plan-activity', label: 'Plan Activity' },
+  { to: '/sponsor/participants', label: 'Participants' },
   { to: '/sponsor/audit', label: 'Audit Log' },
   { to: '/sponsor/blackout', label: 'Blackout Manager' },
 ];
@@ -45,7 +47,7 @@ export default function Sidebar({ variant, isOpen = false, onClose }) {
   const { principal, logout } = useAuth();
   const nav = variant === 'sponsor' ? SPONSOR_NAV : PARTICIPANT_NAV;
   const displayName =
-    variant === 'sponsor' ? principal?.planId || 'Plan Sponsor' : principal?.participantId || 'Participant';
+    variant === 'sponsor' ? principal?.planId || 'Plan Administrator' : principal?.displayName || principal?.participantId || 'Participant';
 
   return (
     <>
@@ -89,7 +91,9 @@ export default function Sidebar({ variant, isOpen = false, onClose }) {
           <div className="min-w-0">
             <div className="text-sm font-medium truncate">{displayName}</div>
             <div className="text-[11px] text-text-faint truncate">
-              {titleCase(principal?.principalType || '')}
+              {principal?.principalType === 'plan_sponsor' || principal?.principalType === 'plan_trustee'
+                ? 'Plan Administrator'
+                : titleCase(principal?.principalType || '')}
             </div>
           </div>
         </div>

@@ -32,16 +32,52 @@ export function useChatStream() {
   const { principal } = useAuth();
   const [isStreaming, setIsStreaming] = useState(false);
   const [isResolving, setIsResolving] = useState(false);
-  // null | { entryId, actionType, expenseType } — shown after human_review responses
-  // that require supporting docs (hardship_distribution, qdro).
-  const [pendingUpload, setPendingUpload] = useState(null);
+  // null | { entryId, actionType, expenseType } — persisted in sessionStorage so it
+  // survives dashboard navigation (component unmounts/remounts between pages).
+  const [pendingUpload, _setPendingUpload] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem('pendingUpload');
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
+  });
+  const setPendingUpload = useCallback((value) => {
+    _setPendingUpload(value);
+    try {
+      if (value) sessionStorage.setItem('pendingUpload', JSON.stringify(value));
+      else sessionStorage.removeItem('pendingUpload');
+    } catch { /* storage unavailable */ }
+  }, []);
+
   // null | { action } — shown after confirming a supervised loan (awaiting_bank_details)
   const [pendingBankDetails, setPendingBankDetails] = useState(null);
   // null | { intent, params } — shown when backend needs taxable-event acknowledgment
   const [pendingTaxAck, setPendingTaxAck] = useState(null);
 
-  const clearChat = useCallback(() => dispatch({ type: 'RESET' }), [dispatch]);
-  const dismissUpload = useCallback(() => setPendingUpload(null), []);
+  const clearChat = useCallback(() => {
+    dispatch({ type: 'RESET' });
+    setPendingUpload(null);
+  }, [dispatch, setPendingUpload]);
+  const dismissUpload = useCallback(() => setPendingUpload(null), [setPendingUpload]);
+
+  // Called by DocumentUploadCard after upload — injects a short persistent
+  // status message into the chat transcript so the result survives navigation.
+  // `cancelled` indicates whether the backend queue entry was actually cancelled.
+  const notifyUpload = useCallback((result, cancelled = true) => {
+    const id = nextId('assistant');
+    let text;
+    if (result?.verified) {
+      text = 'Document verified. Your request is now awaiting your plan administrator\'s approval.';
+    } else if (cancelled) {
+      text = 'Document rejected — your request has been cancelled. Please start a new request with a valid document.';
+    } else {
+      text = 'Document rejected. Your request is still pending — please contact your plan administrator to remove it from the queue.';
+    }
+    dispatch({ type: 'ADD_ASSISTANT_PLACEHOLDER', payload: { id } });
+    dispatch({
+      type: 'COMPLETE_ASSISTANT_MESSAGE',
+      payload: { id, text, autonomy: null, transaction: null, isError: false },
+    });
+  }, [dispatch]);
 
   // Fast path — Haiku classification + direct PAAP/PLAP calls, no CrewAI.
   // Builds history from the current transcript so Haiku has multi-turn context.
@@ -326,6 +362,7 @@ export function useChatStream() {
     cancelTransaction,
     clearChat,
     dismissUpload,
+    notifyUpload,
     submitBankDetails,
     dismissBankDetails,
     acknowledgeTax,

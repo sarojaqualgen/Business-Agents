@@ -12,6 +12,8 @@ import TaxAcknowledgmentCard from './TaxAcknowledgmentCard.jsx';
 import ChatInput from './ChatInput.jsx';
 import DocumentUploadCard from './DocumentUploadCard.jsx';
 import BankDetailsCard from './BankDetailsCard.jsx';
+import { apiClient } from '../../lib/apiClient.js';
+import { ACCOUNT_UPDATED_EVENT } from '../../lib/events.js';
 
 export default function ChatWindow() {
   const { principal } = useAuth();
@@ -28,6 +30,7 @@ export default function ChatWindow() {
     cancelTransaction,
     clearChat,
     dismissUpload,
+    notifyUpload,
     submitBankDetails,
     dismissBankDetails,
     acknowledgeTax,
@@ -62,6 +65,13 @@ export default function ChatWindow() {
     isStreaming && lastMessage?.role === 'assistant' && lastMessage.isStreaming && lastMessage.steps.length === 0;
 
   const blocked = isStreaming || Boolean(pendingTransaction) || Boolean(pendingBankDetails) || Boolean(pendingTaxAck);
+
+  // Pin the upload card to the most recent human_review message so it stays
+  // mounted there even as new messages are added after it. Avoids the card
+  // unmounting/remounting in idle state when notifyUpload injects a new message.
+  const uploadCardIdx = pendingUpload
+    ? messages.reduce((acc, m, i) => (m.autonomy === 'human_review' ? i : acc), -1)
+    : -1;
 
   return (
     <div className="flex flex-col h-[calc(100vh-140px)] card overflow-hidden">
@@ -147,14 +157,37 @@ export default function ChatWindow() {
                     />
                   </div>
                 )}
-                {/* Document upload — pinned right below the human_review response */}
-                {!message.isStreaming && message.autonomy === 'human_review' && pendingUpload && (
+                {/* Document upload — pinned to the human_review message so the card
+                    stays mounted (and keeps its success state) even when new messages
+                    are added after it (e.g. the notifyUpload status message). */}
+                {uploadCardIdx !== -1 && idx === uploadCardIdx && (
                   <div className="max-w-2xl ml-11 msg-enter">
                     <DocumentUploadCard
                       entryId={pendingUpload.entryId}
                       actionType={pendingUpload.actionType}
                       expenseType={pendingUpload.expenseType}
                       onDismiss={dismissUpload}
+                      onUploadComplete={async (result) => {
+                        // If rejected, cancel the queue entry so it leaves the sponsor queue.
+                        let cancelled = false;
+                        if (!result?.verified && pendingUpload?.entryId) {
+                          try {
+                            await apiClient.cancelQueueEntry(pendingUpload.entryId);
+                            cancelled = true;
+                          } catch {
+                            // Cancel failed — queue entry stays pending; message will reflect this.
+                          }
+                        }
+                        // Inject a short persistent message into the chat transcript.
+                        notifyUpload(result, cancelled);
+                        // Tell the Activity page to refresh so the updated status (cancelled
+                        // or pending_review with verified doc) shows immediately.
+                        if (principal?.participantId) {
+                          window.dispatchEvent(new CustomEvent(ACCOUNT_UPDATED_EVENT, {
+                            detail: { participantId: principal.participantId },
+                          }));
+                        }
+                      }}
                     />
                   </div>
                 )}

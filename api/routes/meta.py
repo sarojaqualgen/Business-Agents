@@ -15,7 +15,7 @@ router = APIRouter()
 
 @router.get("/participants")
 def list_participants():
-    from data.db import all_participant_ids
+    from data.db import all_participant_ids, get_participant_name as _gpn
     from data.participants import get_participant
     result = []
     for pid in all_participant_ids():
@@ -25,7 +25,7 @@ def list_participants():
         result.append({
             "participant_id":    p.participant_id,
             "plan_id":           p.plan_id,
-            "display_name":      getattr(p, "display_name", None) or p.participant_id,
+            "display_name":      _gpn(pid) or p.participant_id,
             "employment_status": p.employment_status.value,
             "years_of_service":  p.years_of_vesting_service,
             "vesting_pct":       p.vesting_percentage,
@@ -137,6 +137,7 @@ def participant_activity(session: SessionToken = Depends(get_session)):
     # 3. Review queue entries for this participant
     try:
         from data.review_queue import get_all as rq_get_all
+        from data import document_store as _ds
         for e in rq_get_all():
             if e.participant_id != participant_id:
                 continue
@@ -147,24 +148,31 @@ def participant_activity(session: SessionToken = Depends(get_session)):
                 act_type = "awaiting_bank"
             else:
                 act_type = status  # approved, denied
+            docs = _ds.get_by_entry(e.entry_id)
+            has_verified_doc = any(d.verified for d in docs)
             activities.append({
-                "id":        e.entry_id,
-                "type":      act_type,
-                "action":    e.action,
-                "amount":    e.payload.get("amount") if e.payload else None,
-                "timestamp": e.created_at if hasattr(e, "created_at") else None,
-                "label":     None,
-                "note":      f"Status: {status}",
-                "entry_id":  e.entry_id,
+                "id":              e.entry_id,
+                "type":            act_type,
+                "action":          e.action,
+                "amount":          e.payload.get("amount") if e.payload else None,
+                "expense_type":    e.payload.get("qualifying_expense_type") if e.payload else None,
+                "timestamp":       e.created_at if hasattr(e, "created_at") else None,
+                "label":           None,
+                "note":            f"Status: {status}",
+                "entry_id":        e.entry_id,
+                "has_verified_doc": has_verified_doc,
             })
     except Exception:
         pass
 
-    # Sort newest-first (None timestamps go last)
-    activities.sort(
-        key=lambda a: a["timestamp"] or "0000",
-        reverse=True,
-    )
+    # Sort newest-first (None timestamps go last).
+    # Normalise to ISO-T format so "YYYY-MM-DD HH:MM" (str() on psycopg2 datetime)
+    # sorts consistently with "YYYY-MM-DDTHH:MM" (.isoformat()).
+    def _sort_key(a):
+        ts = a.get("timestamp") or ""
+        return ts.replace(" ", "T") if ts else "0000"
+
+    activities.sort(key=_sort_key, reverse=True)
 
     return {"participant_id": participant_id, "activities": activities}
 

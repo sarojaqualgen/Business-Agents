@@ -90,8 +90,12 @@ Supported transaction intents:
   Do NOT carry over taxable_event_acknowledged from a prior intent if the current intent is different.
 
   rmd required params: taxable_event_acknowledged (boolean)
+  optional params: amount (dollars — only extract if participant explicitly states a dollar amount they want to take;
+    convert Indian lakh notation: "1 lakh" = 100000, "2 lakh" = 200000, etc.)
   Map: "RMD", "required minimum distribution", "take my required distribution", "I have to take money out this year",
   "mandatory withdrawal" → rmd.
+  If the participant does NOT specify an amount, omit it entirely (the system will use the IRS minimum).
+  If the participant specifies an amount, include it in params — the compliance engine enforces the IRS floor.
   taxable_event_acknowledged: set to true if the user says yes/I understand/I acknowledge/proceed/confirmed/ok/sure
   in response to a tax warning. If not yet acknowledged, add "taxable_event_acknowledged" to missing[].
 
@@ -168,6 +172,8 @@ Examples:
   → transaction.intent=separation_distribution, params={{amount:20000}}, missing=["taxable_event_acknowledged"]
 - "I need to take my RMD this year"
   → transaction.intent=rmd, params={{}}, missing=[]
+- "I want to take 1 lakh as my RMD" or "take $100000 as my RMD"
+  → transaction.intent=rmd, params={{amount:100000}}, missing=[]
 - "I need to set up a QDRO, 50% to my ex-wife Jane Smith"
   → transaction.intent=qdro, params={{alternate_payee_name:"Jane Smith",transfer_pct:50}}, missing=[]
 - "Change my beneficiary to my daughter Maria, she's my child"
@@ -341,7 +347,6 @@ def chat_fast(req: ChatFastRequest, session: SessionToken = Depends(get_session)
                 from agents.paap.agent import get_vesting_info
                 data = get_vesting_info(participant_id)
             elif dtype == "rmd":
-                from agents.paap.agent import get_rmd_info
                 data = get_rmd_info(participant_id)
             elif dtype == "distribution_options":
                 from agents.paap.agent import get_distribution_options
@@ -503,8 +508,8 @@ def chat_fast(req: ChatFastRequest, session: SessionToken = Depends(get_session)
                         system_extra="",
                         instruction=(
                             f"A hardship distribution of ${float(amount):,.0f} for '{expense}' "
-                            f"passed compliance checks and is now queued for plan sponsor review. "
-                            f"Tell the participant: (1) it needs sponsor approval, (2) they must "
+                            f"passed compliance checks and is now queued for plan administrator review. "
+                            f"Tell the participant: (1) it needs administrator approval, (2) they must "
                             f"upload supporting documents (e.g. medical bill, eviction notice), "
                             f"(3) they'll be notified when approved. 3 sentences, plain English."
                         ),
@@ -596,7 +601,7 @@ def chat_fast(req: ChatFastRequest, session: SessionToken = Depends(get_session)
                         system_extra="",
                         instruction=(
                             f"An in-service distribution of ${float(amount):,.0f} passed compliance checks "
-                            f"and is queued for plan sponsor review. Tell the participant: (1) it needs sponsor "
+                            f"and is queued for plan administrator review. Tell the participant: (1) it needs administrator "
                             f"approval, (2) they'll be notified when approved. 2 sentences, plain English."
                         ),
                     ))
@@ -673,7 +678,7 @@ def chat_fast(req: ChatFastRequest, session: SessionToken = Depends(get_session)
                         system_extra="",
                         instruction=(
                             f"A separation distribution of ${float(amount):,.0f} passed compliance checks "
-                            f"and is queued for plan sponsor review. Tell the participant it needs sponsor "
+                            f"and is queued for plan administrator review. Tell the participant it needs administrator "
                             f"approval and they'll be notified when approved. 2 sentences."
                         ),
                     ))
@@ -707,16 +712,51 @@ def chat_fast(req: ChatFastRequest, session: SessionToken = Depends(get_session)
                 # If participant said "process my RMD" without specifying amount, use the
                 # plan-calculated rmd_amount_current_year from their record.
                 rmd_payload = {**tx_params, "rmd_notice_issued": True}
-                if "amount" not in rmd_payload:
-                    rmd_info = get_rmd_info(participant_id)
-                    if rmd_info.get("rmd_amount"):
-                        rmd_payload["amount"] = rmd_info["rmd_amount"]
-                result = paap_execute(
-                    participant_id=participant_id,
-                    agent_id=session.agent_id or "portal",
-                    action="rmd",
-                    payload=rmd_payload,
-                )
+                rmd_info = get_rmd_info(participant_id)
+                if "amount" not in rmd_payload and rmd_info.get("rmd_amount"):
+                    rmd_payload["amount"] = rmd_info["rmd_amount"]
+
+                # YTD guard — block duplicate RMD submissions for the same plan year.
+                # Counts both completed transactions and pending queue entries so a
+                # second submission is blocked even while the first awaits administrator approval.
+                import datetime as _dt
+                from decimal import Decimal as _D
+                from data.db import get_rmd_ytd as _get_rmd_ytd
+                _year = _dt.datetime.utcnow().year
+                _already = _get_rmd_ytd(participant_id, _year)
+                _required = _D(str(rmd_info.get("rmd_amount") or 0))
+
+                if _required > 0 and _already >= _required:
+                    # Fully satisfied — block entirely
+                    reply_parts.append(
+                        f"Your {_year} required minimum distribution of "
+                        f"${float(_required):,.2f} has already been fully satisfied — "
+                        f"${float(_already):,.2f} has been taken or is pending this year. "
+                        f"No further RMD action is needed."
+                    )
+                else:
+                    # Partially taken or first request.
+                    # If the participant did not specify an amount, auto-fill with what
+                    # remains of the minimum (not the full required, to avoid over-collecting).
+                    # If they DID specify an amount, pass it through — IRS has no upper cap
+                    # beyond the vested balance; FAP enforces the floor.
+                    if "amount" not in rmd_payload:
+                        if _already > 0 and _required > 0:
+                            _remaining = _required - _already
+                            rmd_payload["amount"] = float(_remaining)
+                            reply_parts.append(
+                                f"Note: ${float(_already):,.2f} of your {_year} RMD has already been "
+                                f"taken or is pending. Processing the remaining "
+                                f"${float(_remaining):,.2f} needed to satisfy your annual requirement."
+                            )
+                        elif rmd_info.get("rmd_amount"):
+                            rmd_payload["amount"] = rmd_info["rmd_amount"]
+                    result = paap_execute(
+                        participant_id=participant_id,
+                        agent_id=session.agent_id or "portal",
+                        action="rmd",
+                        payload=rmd_payload,
+                    )
             except UnauthorizedByFAP as e:
                 reply_parts.append(_haiku_reply(
                     system_extra=(
@@ -750,7 +790,7 @@ def chat_fast(req: ChatFastRequest, session: SessionToken = Depends(get_session)
                         system_extra="",
                         instruction=(
                             f"An RMD (Required Minimum Distribution) of ${float(rmd_amount):,.0f} passed compliance "
-                            f"checks and is queued for plan sponsor review. Tell the participant it needs sponsor "
+                            f"checks and is queued for plan administrator review. Tell the participant it needs administrator "
                             f"approval and they'll be notified when processed. 2 sentences."
                         ),
                     ))
@@ -808,8 +848,8 @@ def chat_fast(req: ChatFastRequest, session: SessionToken = Depends(get_session)
                         system_extra="",
                         instruction=(
                             f"A QDRO (Qualified Domestic Relations Order) of {pct}% to '{payee}' passed "
-                            f"compliance checks and is queued for plan sponsor review. Tell the participant: "
-                            f"(1) it needs sponsor approval, (2) they must upload the court order, "
+                            f"compliance checks and is queued for plan administrator review. Tell the participant: "
+                            f"(1) it needs administrator approval, (2) they must upload the court order, "
                             f"(3) they'll be notified when approved. 3 sentences."
                         ),
                     ))
@@ -872,7 +912,7 @@ def chat_fast(req: ChatFastRequest, session: SessionToken = Depends(get_session)
                         system_extra="",
                         instruction=(
                             f"A beneficiary update designating '{name}' ({rel}) passed compliance checks "
-                            f"and is queued for plan sponsor review. Tell the participant it needs sponsor "
+                            f"and is queued for plan administrator review. Tell the participant it needs administrator "
                             f"approval and they'll be notified when confirmed. 2 sentences."
                         ),
                     ))

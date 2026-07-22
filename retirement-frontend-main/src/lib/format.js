@@ -50,6 +50,18 @@ export function formatTime(timestamp) {
   }
 }
 
+// Format an ISO timestamp as "Jul 21, 2026  3:42 PM"
+export function formatDateTime(timestamp) {
+  if (!timestamp) return '—';
+  try {
+    const d = new Date(timestamp);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      + '  ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  } catch {
+    return '—';
+  }
+}
+
 export function titleCase(value) {
   if (!value) return '';
   return value

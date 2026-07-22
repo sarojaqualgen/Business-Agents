@@ -63,14 +63,14 @@ function VerifiedBadge({ verified }) {
       Verified
     </span>
   ) : (
-    <span className="inline-flex items-center gap-1 text-xs font-medium text-warning bg-warning/10 px-2 py-0.5 rounded-full">
-      <svg viewBox="0 0 16 16" className="w-3.5 h-3.5 fill-warning"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm.75 4v4.5h-1.5V5h1.5zm0 6v1.5h-1.5V11h1.5z"/></svg>
-      Needs Review
+    <span className="inline-flex items-center gap-1 text-xs font-medium text-danger bg-danger/10 px-2 py-0.5 rounded-full">
+      <svg viewBox="0 0 16 16" className="w-3.5 h-3.5 fill-danger"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm.75 4v4.5h-1.5V5h1.5zm0 6v1.5h-1.5V11h1.5z"/></svg>
+      Rejected
     </span>
   );
 }
 
-export default function DocumentUploadCard({ entryId, actionType, expenseType: initialExpenseType, onDismiss }) {
+export default function DocumentUploadCard({ entryId, actionType, expenseType: initialExpenseType, onDismiss, onUploadComplete }) {
   const isQdro = actionType === 'qdro';
   const [expenseType, setExpenseType] = useState(
     isQdro ? 'qdro' : (initialExpenseType || '')
@@ -125,6 +125,14 @@ export default function DocumentUploadCard({ entryId, actionType, expenseType: i
       });
       setResult(res);
       setStatus('success');
+      // Doc is now in the system — clear both sessionStorage keys so navigating
+      // away and returning doesn't re-show the upload form.
+      try {
+        sessionStorage.removeItem('pendingUpload');
+        sessionStorage.removeItem('activityUploadOpen');
+      } catch { /* storage unavailable */ }
+      // Notify parent so it can inject a status message into the chat transcript.
+      onUploadComplete?.(res);
     } catch (err) {
       setErrorMsg(err.message || 'Upload failed. Please try again.');
       setStatus('idle');
@@ -136,48 +144,53 @@ export default function DocumentUploadCard({ entryId, actionType, expenseType: i
   // ── Success state ──────────────────────────────────────────────────────────
   if (status === 'success') {
     const verified = result?.verified ?? false;
-    const borderColor = verified ? 'border-success/30' : 'border-warning/30';
-    const bgColor     = verified ? 'bg-success/5'       : 'bg-warning/5';
-    const iconColor   = verified ? 'fill-success'       : 'fill-warning';
-    const iconBg      = verified ? 'bg-success/15'      : 'bg-warning/15';
     return (
-      <div className={`mt-2 ml-11 border ${borderColor} ${bgColor} rounded-xl p-4 msg-enter`}>
+      <div className={`mt-2 ml-11 border ${verified ? 'border-success/30 bg-success/5' : 'border-danger/30 bg-danger/5'} rounded-xl p-4 msg-enter`}>
         <div className="flex items-start gap-3">
-          <div className={`w-8 h-8 rounded-full ${iconBg} flex items-center justify-center flex-shrink-0 mt-0.5`}>
+          <div className={`w-8 h-8 rounded-full ${verified ? 'bg-success/15' : 'bg-danger/15'} flex items-center justify-center flex-shrink-0 mt-0.5`}>
             {verified ? (
-              <svg viewBox="0 0 20 20" className={`w-4 h-4 ${iconColor}`}>
+              <svg viewBox="0 0 20 20" className="w-4 h-4 fill-success">
                 <path fillRule="evenodd" d="M16.7 5.3a1 1 0 0 1 0 1.4l-7 7a1 1 0 0 1-1.4 0l-3-3a1 1 0 1 1 1.4-1.4L9 11.59l6.3-6.3a1 1 0 0 1 1.4 0z" clipRule="evenodd"/>
               </svg>
             ) : (
-              <svg viewBox="0 0 16 16" className={`w-4 h-4 ${iconColor}`}>
-                <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm.75 4v4.5h-1.5V5h1.5zm0 6v1.5h-1.5V11h1.5z"/>
+              <svg viewBox="0 0 20 20" className="w-4 h-4 fill-danger">
+                <path d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"/>
               </svg>
             )}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-sm font-semibold text-text">Document uploaded</span>
+              <span className="text-sm font-semibold text-text">
+                {verified ? 'Document verified' : 'Document rejected'}
+              </span>
               <VerifiedBadge verified={verified} />
             </div>
-            {result?.verification_note && (
-              <p className="text-xs text-text-muted leading-relaxed mb-1">
-                {result.verification_note}
-              </p>
-            )}
-            {result?.key_details && (
-              <p className="text-xs text-text-faint">
-                <span className="font-medium">Details:</span> {result.key_details}
-              </p>
-            )}
-            {!result?.verified && result?.name_on_document && !result?.name_match && (
-              <p className="text-xs text-danger mt-1">
-                Name on document ("{result.name_on_document}") does not match your account name.
-              </p>
-            )}
-            {!result?.verification_note && (
-              <p className="text-xs text-text-faint">
-                Your document has been saved and is on file for sponsor review.
-              </p>
+            {verified ? (
+              <>
+                {result?.key_details && (
+                  <p className="text-xs text-text-muted leading-relaxed">{result.key_details}</p>
+                )}
+                {result?.name_on_document && (
+                  <p className="text-xs text-text-faint mt-1">
+                    <span className="font-medium text-text-muted">Name on document:</span> {result.name_on_document}
+                  </p>
+                )}
+                {result?.filename && (
+                  <p className="text-xs text-text-faint mt-0.5 font-mono truncate">{result.filename}</p>
+                )}
+                <p className="text-xs text-success/70 mt-2">
+                  Your document is on file and awaiting administrator approval.
+                </p>
+              </>
+            ) : (
+              <>
+                {result?.verification_note && (
+                  <p className="text-xs text-danger/80 leading-relaxed mb-1">{result.verification_note}</p>
+                )}
+                <p className="text-xs text-danger/70 font-medium">
+                  Your request has been cancelled. Please start a new request with a valid document.
+                </p>
+              </>
             )}
           </div>
           <button
@@ -212,7 +225,7 @@ export default function DocumentUploadCard({ entryId, actionType, expenseType: i
             </div>
           </div>
           <p className="text-xs text-text-muted mt-2 leading-relaxed">
-            Your plan sponsor requires proof before approving this request. Upload a document and our system will verify it automatically.
+            Your plan administrator requires proof before approving this request. Upload a document and our system will verify it automatically.
           </p>
         </div>
         <button onClick={onDismiss} aria-label="Skip upload" className="text-text-faint hover:text-text-muted transition-colors flex-shrink-0">

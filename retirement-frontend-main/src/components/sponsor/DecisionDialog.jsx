@@ -18,7 +18,7 @@ export default function DecisionDialog({ entry, mode, onSubmit, onCancel, isSubm
           {isApprove ? 'Approve Request' : 'Deny Request'}
         </h3>
         <p className="text-xs text-text-muted mb-4">
-          {entry.entry_id} · {titleCase(entry.action)} · {entry.participant_id}
+          {entry.entry_id} · {titleCase(entry.action)} · {entry.participant_name || entry.participant_id}
         </p>
 
         <label className="block mb-4">

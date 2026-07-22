@@ -76,7 +76,7 @@ export default function QueueTable({ entries, onApprove, onDeny, onViewDocs }) {
                   <p className="font-mono text-[11px] text-text-muted">{entry.entry_id}</p>
                   <p className="font-mono text-[10px] text-text-faint">{entry.plan_id}</p>
                 </td>
-                <td className="py-3 pr-4 font-mono text-[12px]">{entry.participant_id}</td>
+                <td className="py-3 pr-4 text-[13px]">{entry.participant_name || entry.participant_id}</td>
                 <td className="py-3 pr-4">{titleCase(entry.action)}</td>
                 <td className="py-3 pr-4 tabular-nums">
                   {amount != null ? formatCurrency(amount) : '—'}

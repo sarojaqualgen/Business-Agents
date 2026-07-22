@@ -88,8 +88,8 @@ def _row_to_entry(r: dict) -> ReviewQueueEntry:
         fap_token=r.get("fap_token", ""),
         status=r.get("status", "pending"),
         sponsor_note=r.get("sponsor_note", ""),
-        created_at=str(r.get("created_at", "")),
-        resolved_at=str(r["resolved_at"]) if r.get("resolved_at") else None,
+        created_at=r["created_at"].isoformat() if hasattr(r.get("created_at"), "isoformat") else str(r.get("created_at", "")),
+        resolved_at=r["resolved_at"].isoformat() if hasattr(r.get("resolved_at"), "isoformat") else (str(r["resolved_at"]) if r.get("resolved_at") else None),
     )
 
 
@@ -310,6 +310,30 @@ def finalize_disbursed(entry_id: str) -> Optional[ReviewQueueEntry]:
         entry.resolved_at = now
         _save()
     return entry
+
+
+def cancel(entry_id: str, note: str = "", resolved_at: str = "") -> Optional[ReviewQueueEntry]:
+    """Participant cancels their own pending request (e.g. after document rejection)."""
+    try:
+        from data import db  # noqa: PLC0415
+        db.update_review_queue_status(
+            entry_id=entry_id,
+            new_status="cancelled",
+            sponsor_note=note,
+            resolved_at=resolved_at,
+        )
+    except Exception:
+        pass
+
+    # Always sync in-memory so the fallback path in get_all() stays consistent with DB.
+    entry = next((e for e in _queue if e.entry_id == entry_id and e.status == "pending"), None)
+    if entry:
+        entry.status = "cancelled"
+        entry.sponsor_note = note
+        entry.resolved_at = resolved_at
+        _save()
+
+    return get_entry(entry_id)
 
 
 def deny(entry_id: str, sponsor_note: str = "", resolved_at: str = "") -> Optional[ReviewQueueEntry]:

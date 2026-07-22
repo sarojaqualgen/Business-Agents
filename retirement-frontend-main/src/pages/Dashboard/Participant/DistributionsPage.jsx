@@ -79,7 +79,7 @@ const DIST_TYPES = [
     description:
       'Withdraw from your account while still actively employed. Only available once you reach age 59½. No qualifying expense is required. Subject to ordinary income tax; the 10% early withdrawal penalty (IRC §72(t)) does not apply.',
     citation: 'IRC §401(k)(2)(B)(i)(I) · IRC §72(t)',
-    autonomy: 'Queued for plan sponsor review',
+    autonomy: 'Queued for plan administrator review',
     autonomyIcon: '📋',
     fields: [
       { label: 'Amount', hint: 'any dollar amount from your vested balance', required: true },
@@ -101,7 +101,7 @@ const DIST_TYPES = [
     description:
       'Distribute your vested balance after separating from service — resignation, termination, or retirement. Subject to ordinary income tax and mandatory 20% federal withholding on eligible rollover amounts. Eligible for rollover to an IRA or new employer plan to defer taxes.',
     citation: 'IRC §402(a) · IRC §3405 · ERISA §205',
-    autonomy: 'Queued for plan sponsor review',
+    autonomy: 'Queued for plan administrator review',
     autonomyIcon: '📋',
     fields: [
       { label: 'Amount', hint: 'specific dollar amount, or "full vested balance"', required: true },
@@ -125,7 +125,7 @@ const DIST_TYPES = [
     description:
       'Federal law requires you to begin withdrawing a minimum amount from your account each year starting at age 73 (SECURE 2.0). The plan calculates your RMD based on your account balance and IRS life-expectancy tables. Subject to ordinary income tax; failure to take the RMD results in a 25% excise tax on the shortfall.',
     citation: 'IRC §401(a)(9) · SECURE 2.0 Act §107',
-    autonomy: 'Queued for plan sponsor review',
+    autonomy: 'Queued for plan administrator review',
     autonomyIcon: '📋',
     fields: [
       { label: 'RMD amount', hint: 'or say "calculate my RMD" — the plan will determine the figure', required: false },
@@ -145,9 +145,9 @@ const DIST_TYPES = [
     badge: 'Court order required',
     badgeColor: 'bg-rose-50 text-rose-700 border-rose-200',
     description:
-      'A Qualified Domestic Relations Order (QDRO) divides your retirement account between you and an alternate payee (typically a former spouse) as directed by a divorce or separation court order. Taxes fall on the alternate payee, not you. Requires uploading the court order document. Plan sponsor must issue a determination within 18 months.',
+      'A Qualified Domestic Relations Order (QDRO) divides your retirement account between you and an alternate payee (typically a former spouse) as directed by a divorce or separation court order. Taxes fall on the alternate payee, not you. Requires uploading the court order document. Plan administrator must issue a determination within 18 months.',
     citation: 'ERISA §206(d)(3) · IRC §414(p)',
-    autonomy: 'Queued for plan sponsor review + document verification',
+    autonomy: 'Queued for plan administrator review + document verification',
     autonomyIcon: '🔍',
     fields: [
       { label: 'Alternate payee name', hint: 'full legal name of the person receiving funds', required: true },

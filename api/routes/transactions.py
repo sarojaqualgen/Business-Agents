@@ -43,7 +43,7 @@ router = APIRouter()
 
 # Actions that disburse funds to a bank account — require bank details step.
 # deferral_change and investment_reallocation are supervised but move no external funds.
-DISBURSEMENT_ACTIONS = {"loan_initiation", "hardship_distribution", "in_service_distribution"}
+DISBURSEMENT_ACTIONS = {"loan_initiation", "hardship_distribution", "in_service_distribution", "separation_distribution", "rmd"}
 
 
 def _record_execution(

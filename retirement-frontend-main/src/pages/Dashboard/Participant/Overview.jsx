@@ -39,7 +39,7 @@ const ACTIONS = [
     icon: <HardshipIcon />,
     title: 'Hardship Withdrawal',
     description: 'Access funds early for an IRS-qualifying financial hardship.',
-    tooltip: 'Withdraw funds for a qualifying safe-harbor expense — medical bills, eviction prevention, tuition, funeral costs, or disaster relief. Requires supporting documentation and plan sponsor review.',
+    tooltip: 'Withdraw funds for a qualifying safe-harbor expense — medical bills, eviction prevention, tuition, funeral costs, or disaster relief. Requires supporting documentation and plan administrator review.',
     to: '/participant/hardship',
   },
   {
@@ -80,7 +80,7 @@ const ACTIONS = [
     icon: <DocumentIcon />,
     title: 'View Submitted Documents',
     description: "Review the status of documents you've submitted for a pending request.",
-    tooltip: "See every document you've uploaded in support of a hardship or QDRO request, along with its verification status. Your plan sponsor reviews each document before approving.",
+    tooltip: "See every document you've uploaded in support of a hardship or QDRO request, along with its verification status. Your plan administrator reviews each document before approving.",
     to: '/participant/documents',
     tooltipUp: true,
   },

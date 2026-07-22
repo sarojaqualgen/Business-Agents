@@ -16,6 +16,7 @@
 | `amara.osei` | `Demo2026!` | Amara Osei | PLAN-003 (Capital One) | PART-008 |
 | `daniela.reyes` | `Demo2026!` | Daniela Reyes | PLAN-003 (Capital One) | PART-009 |
 | `yuki.tanaka` | `Demo2026!` | Yuki Tanaka | PLAN-004 (Prudential) | PART-007 |
+| `eleanor.walsh` | `Demo2026!` | Eleanor Walsh | PLAN-003 (Capital One) | PART-010 |
 
 ### Plan Sponsors
 
@@ -36,10 +37,11 @@
 | PART-007 | Yuki Tanaka | 31.6 | active | $38,000 | $42,000 | 4% | 0 | **$19,000** | PLAN-004 |
 | PART-008 | Amara Osei | 36.4 | active | $85,000 | $92,000 | 6% | 0 | **$42,500** | PLAN-003 |
 | PART-009 | Daniela Reyes | 40.8 | **terminated** (2026-03-01) | $100,000 | $105,000 | 8% | 1 ($22k outstanding, highest $25k) | **$25,000** | PLAN-003 |
+| PART-010 | Eleanor Walsh | 75.4 | **retired** (2016-03-10) | $400,000 | $415,000 | 0% | 0 | $0 (retired) | PLAN-003 |
 
 - **Gabriel** — only participant who qualifies for in-service (age 62 ≥ 59½, active)
 - **Daniela** — terminated; use for separation distribution happy path, and to show in-service/hardship correctly denied for ex-employees
-- No participant ≥ 73 → RMD always denied
+- **Eleanor** — the ONLY participant with `rmd_required=True`; use for RMD happy path. All others are below 73 → proactive redirect fires instead.
 
 **Loan headroom formula (IRC §72(p)):** `min( $50,000 − highest loan balance last 12 months, 50% of vested balance )`
 - Gabriel: min($50k − $0, $105k) = **$50k** ← no prior loans; $50k absolute cap is binding
@@ -70,17 +72,33 @@
 
 All files are in `data/sample_docs/`. Name on document must match the logged-in participant.
 
-| File | Participant Named | Use For |
-|---|---|---|
-| `medical_bill.txt` | Amara Osei | Hardship — medical |
-| `eviction_notice.txt` | Amara Osei | Hardship — prevent_eviction |
-| `tuition_invoice.txt` | Amara Osei Jr. | Hardship — tuition |
-| `funeral_invoice.txt` | (check file) | Hardship — funeral |
-| `qdro_court_order.txt` | Amara Osei (Petitioner) | QDRO |
-| `gabriel_medical_bill.pdf` | Gabriel Stone | Hardship — medical (Gabriel's account) |
-| `gabriel_tuition_invoice.pdf` | Gabriel Stone | Hardship — tuition (Gabriel's account) |
+| File | Participant Named | Use For | Extraction |
+|---|---|---|---|
+| `medical_bill.txt` | Amara Osei | Hardship — medical | Local UTF-8 (Azure DI skips `.txt`) |
+| `eviction_notice.txt` | Amara Osei | Hardship — prevent_eviction | Local UTF-8 |
+| `tuition_invoice.txt` | Amara Osei Jr. | Hardship — tuition (**name mismatch test**) | Local UTF-8 |
+| `funeral_invoice.txt` | Amara Osei | Hardship — funeral | Local UTF-8 |
+| `qdro_court_order.txt` | Amara Osei (Petitioner) | QDRO | Local UTF-8 |
+| `gabriel_medical_bill.pdf` | Gabriel Stone | Hardship — medical (Gabriel's account) | **Azure DI** (`prebuilt-invoice`) |
+| `gabriel_tuition_invoice.pdf` | Gabriel Stone | Hardship — tuition (Gabriel's account) | **Azure DI** (`prebuilt-invoice`) |
 
-**Name-match rule:** LLM verifies the name on the uploaded document matches the logged-in participant. If names differ → `verified=false`, sponsor cannot approve.
+**Extraction pipeline (two-stage):**
+1. **Azure Document Intelligence** — runs first for `.pdf`, `.docx`, `.jpg`, `.png`, `.tiff`, `.bmp`. Uses `prebuilt-invoice` model for medical/tuition/funeral invoices (extracts `VendorName`, `CustomerName`, `InvoiceTotal`). Uses `prebuilt-read` for court orders and other docs. Returns `extraction_model` field in upload response.
+2. **Local fallback** — `.txt` files always use local UTF-8 decode (Azure DI does not support plain text). If Azure DI is not configured or fails, falls back to `pdfplumber` (PDF) or `python-docx` (DOCX).
+3. **Haiku verification** — semantic content check. If Azure DI extracted a `CustomerName`, name matching is done rule-based before Haiku runs (faster, more reliable). Haiku still runs for content validity.
+
+**Name-match rules (strict):**
+- Last name must match — first name alone is NOT enough (too many people share a first name)
+- "Amara Osei Jr." matches "Amara Osei" — suffixes (`Jr.`, `Sr.`, `III`) stripped before comparison
+- "Amara Osei" does NOT match "Amara Chen" — last name is the hard requirement
+- Azure DI `CustomerName` is compared rule-based before Haiku runs; if mismatch → instant rejection, Haiku not called
+
+**Three-check verification (Haiku):**
+1. **Document authenticity** — is this genuinely a [doc_type]? Must contain all required fields. Adversarial: "could this be a grocery receipt / bank statement / personal letter mislabeled?"
+2. **Expense coherence** — does the content actually support the claimed [expense_type]? A medical bill uploaded for "eviction" fails here even if the format is correct.
+3. **Name match** — person on document must match participant (last name required). If Azure DI already resolved this, Haiku is told the answer and cannot override it.
+
+If ANY check fails → `verified=false`, sponsor blocked from approving.
 
 ---
 
@@ -184,6 +202,7 @@ Expected: FAP denies — PLAN-003 primary residence max is 15 years. (PLAN-004 a
 
 **Autonomy: `human_review`** — queued for sponsor + document upload required before sponsor can approve
 **FAP Rule:** Rule 6 (`_check_hardship_rules`) → checks qualifying_expense_type
+**Document upload trigger:** `chat_fast.py` returns `{ autonomy: "human_review", transaction: { action: "hardship_distribution", entry_id: "..." } }` → frontend `useChatStream.js` detects `UPLOAD_REQUIRED_TYPES.has("hardship_distribution")` → sets `pendingUpload` → `ChatWindow.jsx` renders `<DocumentUploadCard />` → participant uploads → `POST /documents/upload-fast` → Azure DI → Haiku → stored.
 
 Valid IRS expense categories: `medical`, `tuition`, `primary_home_purchase`, `prevent_eviction`, `funeral`, `casualty_loss`, `FEMA_disaster`
 
@@ -197,7 +216,7 @@ Valid IRS expense categories: `medical`, `tuition`, `primary_home_purchase`, `pr
 "Medical expenses — I need $6,000"
 ```
 Expected: FAP approves → `human_review` → queued → document upload card appears.
-Upload: `medical_bill.txt` — named Amara Osei, matches account → `verified=true`.
+Upload: `medical_bill.txt` — named Amara Osei, matches account → `verified=true`. `extraction_model: "local"` (`.txt` skips Azure DI).
 
 ---
 
@@ -280,9 +299,13 @@ Turn 3: "$3,000 for medical"
 "I need $3,000 for medical bills"
 ```
 Upload: `medical_bill.txt` (named Amara Osei, not Gabriel)
-Expected: LLM name-match check fails → `verified=false` → "Name on document does not match account holder."
+Expected: name-match check fails → `verified=false` → "Name on document does not match account holder."
 Sponsor **cannot** approve until a verified document is on file.
-Correct upload: `gabriel_medical_bill.pdf` (named Gabriel Stone) → `verified=true`.
+
+Correct upload: `gabriel_medical_bill.pdf` (named Gabriel Stone):
+- Azure DI uses `prebuilt-invoice` → extracts `CustomerName: "Gabriel Stone"` → rule-based match passes before Haiku runs
+- `extraction_model: "prebuilt-invoice"` returned in response
+- `verified=true` → sponsor can approve
 
 ---
 
@@ -524,52 +547,65 @@ Message: "Separation distributions are only available to participants who have p
 **FAP Rule:** Rule 6 (`_check_rmd_rules`) — requires `rmd_required=True` on participant record
 **Portal auto-injects:** `rmd_notice_issued=True` — plan sends the IRC §401(a)(9) notice by January 31; participant does not enter this
 **Amount auto-filled:** If participant says "process my RMD" without specifying an amount, the portal uses `rmd_amount_current_year` from their record (IRS Uniform Lifetime Table calculation)
+**Bank details:** After sponsor approves → `approved_awaiting_bank_details` → participant's Activity page shows bank details form → enters routing + account → `POST /transactions/disburse` → funds disburse
 
-> **Demo status:** No participant is age 73+ — all RMD transaction attempts will be intercepted by the **proactive context check** (`rmd_required=False`) before FAP is called. This is the correct, realistic behavior. When the recordkeeper feed updates `rmd_required=True` for a participant, the flow passes through to FAP automatically — no code change needed. Gabriel is closest at age 62.2 (reaches 73 in 2037).
+**Eleanor Walsh (PART-010)** — the only participant with `rmd_required=True`:
+- Age 75.4 / retired / PLAN-003
+- IRS Uniform Lifetime Table age 75 → distribution period 24.6
+- Prior year-end vested balance: $400,000
+- 2026 RMD = $400,000 / 24.6 = **$16,260** (auto-filled when participant doesn't specify amount)
+- RMD due date: 2026-12-31
 
 ---
 
-### 7a. Proactive redirect — not yet required (all participants)
-**Login:** Any participant (Gabriel recommended — closest to 73 at age 62.2)
+### 7a. Happy path — Eleanor, amount auto-filled
+**Login:** Eleanor Walsh (PART-010)
 ```
 "I need to take my RMD this year"
 "Process my required minimum distribution"
-"I have to take money out — mandatory withdrawal"
+"I have to take my mandatory withdrawal"
+```
+Expected: TaxAcknowledgmentCard → "Yes, I Acknowledge" → FAP runs (`rmd_required=True` ✓, `rmd_notice_issued` auto-injected ✓, amount auto-filled $16,260 ✓) → `human_review` → queued.
+Sponsor approves (no doc required) → `approved_awaiting_bank_details` → Eleanor provides bank details → funds disburse.
+
+---
+
+### 7b. Happy path — Eleanor specifies amount at or above minimum
+**Login:** Eleanor Walsh (PART-010)
+```
+"I want to take $20,000 as my RMD this year"
+"Take $16,260 for my RMD"
+```
+Expected: TaxAcknowledgmentCard → FAP approves (amount ≥ $16,260 minimum) → `human_review` → queued.
+
+---
+
+### 7c. Denial — amount below minimum
+**Login:** Eleanor Walsh (PART-010)
+```
+"I only want to take $500 for my RMD this year"
+"Can I just take $1,000 as my RMD?"
+```
+Expected: TaxAcknowledgmentCard → "Yes, I Acknowledge" → FAP Rule 6 denies `RMD_AMOUNT_INSUFFICIENT`.
+Message: "Your 2026 RMD of $16,260 is the minimum required — $500 is below the threshold. The 25% IRS excise tax applies to any shortfall under IRC §4974."
+
+---
+
+### 7d. Proactive redirect — not yet required (all other participants)
+**Login:** Gabriel Stone (PART-006) — closest to 73 at age 62.2
+```
+"I need to take my RMD this year"
+"Process my required minimum distribution"
 "What is my RMD amount?"
 ```
-Expected: **proactive context check fires before FAP** — `rmd_required=False` on the participant record → Haiku explains RMDs haven't started yet.
-Message: "Required Minimum Distributions begin at age 73 under SECURE 2.0 (IRC §401(a)(9)). Based on your account, you have not yet reached that threshold. You'll receive a notice when your first RMD becomes due."
+Expected: **proactive context check fires before FAP** — `rmd_required=False` → explains RMDs haven't started yet.
+Message: "Based on your account, you are not yet required to take a Required Minimum Distribution. RMDs begin at age 73 under SECURE 2.0 (IRC §401(a)(9))."
 
-> **Compliance demonstration:** The proactive check catches this before FAP is called. The 25% IRS excise tax on missed RMDs (IRC §4974) is the risk being guarded — the system ensures RMDs don't process prematurely and don't get missed once required.
-
----
-
-### 7b. What happens when rmd_required=True (future / real participant)
-
-When a participant's `rmd_required=True` and `rmd_amount_current_year` is set in the DB:
-
-```
-"Process my required minimum distribution"
-→ TaxAcknowledgmentCard (RMD is a taxable event, 25% excise tax if missed)
-→ "Yes, I Acknowledge"
-→ FAP runs:  rmd_required=True ✓  rmd_notice_issued auto-injected ✓
-             amount auto-filled from rmd_amount_current_year ✓
-→ human_review → queued for sponsor
-→ Sponsor approves → status = approved_awaiting_bank_details
-→ Participant's Activity page shows bank details form
-→ Participant enters routing + account → POST /transactions/disburse → funds disburse
-```
-
-If participant requests less than the minimum:
-```
-"I only want to take $500 this year for my RMD"
-→ FAP Rule 6 denies RMD_AMOUNT_INSUFFICIENT
-Message: "RMD of $500 is below the required $X,XXX for the current plan year."
-```
+> The 25% IRS excise tax (IRC §4974) on missed RMDs is the risk this proactive check guards against — the system ensures RMDs don't process prematurely and don't get missed once required.
 
 ---
 
-### 7c. Chat data question — RMD info (works for all participants)
+### 7e. Chat data question — RMD info
 **Login:** Any participant
 ```
 "When do I have to start taking RMDs?"
@@ -578,14 +614,45 @@ Message: "RMD of $500 is below the required $X,XXX for the current plan year."
 "How is my RMD calculated?"
 ```
 Expected: data question, not a transaction → Haiku explains RMD rules (age 73, IRC §401(a)(9), SECURE 2.0, IRS Uniform Lifetime Table).
+For Eleanor: returns `rmd_required=True`, `rmd_amount=$16,260`, `rmd_due_date=2026-12-31`.
 
 ---
 
 ## 8. QDRO (Qualified Domestic Relations Order)
 
+### What is a QDRO?
+
+A **Qualified Domestic Relations Order** is a court order — issued as part of a divorce or legal separation — that splits a 401(k) account between the participant (the account holder) and an **alternate payee** (typically the ex-spouse).
+
+**Why it needs a special court order:**
+Under ERISA § 206(d), retirement plan assets have **anti-alienation protection** — they cannot be assigned to creditors, garnished, or transferred. This is why a regular divorce settlement cannot touch a 401(k). A QDRO is the one specific exception Congress carved out: it lets a divorce court override anti-alienation, but only if the order meets exact legal requirements.
+
+**What a QDRO must contain (IRC § 414(p)):**
+- Full name and address of the participant
+- Full name and address of the alternate payee
+- The plan name
+- The dollar amount OR percentage being assigned
+- The number of payments or the period to which the order applies
+
+**What happens after the QDRO is approved:**
+1. The plan sponsor reviews the court order and determines it "qualifies" within 18 months (ERISA § 206(d)(3)(H)) — this is what the sponsor does in the review queue
+2. The recordkeeper (Fidelity, in our case) creates a **separate account** for the alternate payee
+3. The assigned percentage of the participant's vested balance is moved to that account
+4. The alternate payee is then treated as a plan participant for their portion — they can leave it invested, roll it over to their own IRA, or take a distribution (with their own tax consequences)
+
+**Key difference from other distributions:**
+- QDRO does NOT go to the participant's bank account
+- It goes to the alternate payee's retirement account
+- No 10% early withdrawal penalty applies on the alternate payee's subsequent distribution (even if they're under 59½)
+- After QDRO approval in our system → status goes to `approved` (not `approved_awaiting_bank_details`) — the recordkeeper handles the rest
+
+---
+
 **Autonomy: `human_review`** — queued for sponsor + document upload required (court order)
 **FAP Rule:** Rule 8 (anti-alienation exception for QDRO), Rule 6 (`_check_qdro_rules`)
 **PAAP auto-fills:** `participant_name` (DB lookup), `plan_name`, `benefit_amount_or_pct`, `payment_period=lump_sum`
+**Document upload trigger:** Same frontend mechanism as hardship — `useChatStream.js` checks `UPLOAD_REQUIRED_TYPES.has("qdro")` → `<DocumentUploadCard />` shown. Court orders use `prebuilt-read` Azure DI model (not invoice model).
+**After sponsor approval:** Status → `approved` (not `approved_awaiting_bank_details`) — QDRO is NOT in `_DISBURSEMENT_ACTIONS`. The recordkeeper creates the alternate payee account externally.
 
 ---
 
@@ -596,9 +663,20 @@ Expected: data question, not a transaction → Haiku explains RMD rules (age 73,
 "QDRO — transfer 50% of my account to Jane Smith"
 "Divorce settlement — 50% goes to Jane Smith via QDRO"
 ```
-Expected: PAAP enriches payload → FAP approves → `human_review` → queued → document upload card.
-Upload: `qdro_court_order.txt` (Petitioner: Amara Osei) → `verified=true`.
-Sponsor approves docs → approves entry → Amara provides bank details → funds split.
+Expected: PAAP enriches payload (adds participant_name, plan_name, benefit_amount_or_pct) → FAP approves → `human_review` → queued → document upload card appears.
+Upload: `qdro_court_order.txt` (Petitioner: Amara Osei) → Azure DI `prebuilt-read` → Haiku verifies (real court order, names Amara Osei, names the plan) → `verified=true`.
+
+**Sponsor approval flow (no bank details — QDRO is different from hardship):**
+1. Login as `admin.capitalone` → Review Queue → find Amara's QDRO entry
+2. Docs tab → verified court order on file → "Approve Documents"
+3. "Approve Request" → **at this moment the system executes the split:**
+   - Amara's vested balance: $85,000 × 50% = **$42,500 transferred** to Jane Smith's account
+   - Amara's new vested balance: **$42,500**
+   - Transaction recorded: `action=qdro, amount=$42,500`
+   - Status → `approved`
+4. Response: "QDRO approved. 50% of the participant's vested balance has been allocated to Jane Smith. The recordkeeper (Fidelity) will create a separate account for the alternate payee and notify them directly."
+
+> **No bank account numbers needed from anyone.** The $42,500 moves to a separate Fidelity account for Jane Smith — the recordkeeper handles that externally. Amara does not provide routing/account numbers. Jane Smith does not interact with our portal.
 
 ---
 
@@ -608,8 +686,8 @@ Sponsor approves docs → approves entry → Amara provides bank details → fun
 "Court-ordered transfer — 30% to Carlos Reyes"
 "QDRO for my divorce — 30% to Carlos Reyes"
 ```
-Expected: FAP approves → `human_review`.
-Note: `transfer_pct=30` → PAAP computes `amount = $100,000 × 30% = $30,000` at execution time.
+Expected: FAP approves → `human_review` → document upload card.
+Note: `transfer_pct=30` → at sponsor approval: `amount = $100,000 × 30% = $30,000` debited from Daniela's vested balance.
 
 ---
 
@@ -1014,8 +1092,259 @@ Both entries → `approved_awaiting_bank_details`.
 - Login as `gabriel.stone` → Activity page → "Provide Bank Details" button auto-shown → enter routing + account → Submit → disbursed.
 - Login as `daniela.reyes` → Activity page → same flow.
 
-### Step 19 — Deny Amara's QDRO
-Enter note: "Awaiting certified court filing — resubmit with stamped order."
+### Step 19 — Approve Amara's QDRO
+Docs tab → `verified=true` → Approve docs → Approve entry.
+System executes immediately: Amara's vested balance reduced by 50% ($42,500). Status → `approved`.
+No bank details required — alternate payee account created by Fidelity externally.
+
+*(To show a denial instead: enter note "Awaiting certified court filing — resubmit with stamped order" → Deny)*
 
 ### Step 20 — Audit log
 Show full compliance trail — every FAP decision with ERISA citation, timestamp, and result.
+
+---
+
+## 14. Document Upload & Verification — Full Flow
+
+Applies to: **hardship_distribution** and **qdro** only. All other `human_review` actions (in-service, separation, beneficiary, RMD) have no document requirement.
+
+---
+
+### What triggers the upload card
+
+`chat_fast.py` does not ask for documents. It runs compliance and returns:
+```json
+{
+  "autonomy": "human_review",
+  "transaction": {
+    "action": "hardship_distribution",
+    "amount": 4000.0,
+    "qualifying_expense_type": "medical",
+    "entry_id": "REV-abc123"
+  }
+}
+```
+`useChatStream.js` sees `autonomy=human_review` + `UPLOAD_REQUIRED_TYPES.has("hardship_distribution")` → sets `pendingUpload` state → `ChatWindow.jsx` renders `<DocumentUploadCard />` below the assistant reply.
+
+Actions that do NOT trigger upload card: `in_service_distribution`, `separation_distribution`, `beneficiary_update`, `rmd`.
+
+---
+
+### Step-by-step after user clicks Upload
+
+```
+User selects file → clicks Upload
+         │
+         ▼
+POST /documents/upload-fast
+  (queue_entry_id, action_type, expense_type, doc_type, file)
+         │
+         ▼
+documents.py — upload route
+         │
+         ├── Is it .txt?
+         │      YES → local UTF-8 decode → content_text
+         │             (Azure DI does not support plain text)
+         │
+         └── .pdf / .jpg / .png / .docx / .tiff / .bmp ?
+                YES → azure_doc_intelligence.py
+                         │
+                         ├── Is doc_type a medical/tuition/funeral invoice?
+                         │      YES → prebuilt-invoice model
+                         │             extracts: VendorName, CustomerName,
+                         │                       InvoiceTotal, Date
+                         │             (structured fields, typed)
+                         │
+                         └── NO  → prebuilt-read model
+                                    extracts: raw OCR text only
+                                    (for court orders, eviction notices, etc.)
+         │
+         ▼
+verify_document.py — 4-stage pipeline
+```
+
+---
+
+### verify_document.py — 4 stages in order
+
+**Stage 0 — Doc-type validity (rule, no LLM)**
+```
+Is doc_type allowed for this expense_type?
+medical_bill + prevent_eviction  →  REJECTED immediately
+eviction_notice + medical        →  REJECTED immediately
+```
+
+**Stage 1 — Name match from Azure DI (rule, no LLM)**
+```
+Did Azure DI extract a CustomerName?
+│
+├── YES → compare to participant name (rule-based, not LLM)
+│          Matching rules (strictest wins first):
+│            1. Exact token match after stripping suffixes (Jr., Sr., III)
+│            2. One name is a subset of the other
+│               "Amara Osei" ⊆ "Amara Osei Jr."  →  PASS
+│            3. Both first AND last name must match
+│               "Amara Chen" vs "Amara Osei"  →  FAIL (last names differ)
+│               "John Osei"  vs "Amara Osei"  →  FAIL (first names differ)
+│            4. Single extracted token must be the LAST name
+│               first-name-only match is rejected
+│
+│    Name mismatch → REJECTED, Haiku never called
+│    Name match    → continue to Haiku, tell it "name already confirmed"
+│
+└── NO (Azure DI couldn't extract CustomerName, or file is .txt)
+     → continue to Haiku, ask it to find and check the name itself
+```
+
+**Stage 2 — Haiku semantic verification (3 checks in one call)**
+
+Haiku receives:
+- Full OCR text (first 1500 chars)
+- Pre-extracted fields from Azure DI (vendor, customer, amount, date) — when available
+- The claimed `doc_type` and `expense_type`
+- The participant name
+- Whether name was already verified by Stage 1
+
+Haiku runs three adversarial checks:
+
+```
+CHECK 1 — Document authenticity
+  "Is this actually a Medical Bill, or could it be a grocery receipt /
+   bank statement / personal letter that someone mislabeled?"
+  Must contain ALL required fields for the doc_type.
+  If missing most required fields → verified=false
+
+CHECK 2 — Expense coherence
+  "Does this document's content support the claimed expense type?"
+  Medical bill uploaded as eviction notice  →  verified=false
+  Funeral invoice uploaded as tuition       →  verified=false
+  Even correct format, wrong purpose        →  verified=false
+
+CHECK 3 — Name match (only runs if Stage 1 didn't resolve it)
+  Find person name in raw text (patient, tenant, student, buyer, payer).
+  Must match participant's last name at minimum.
+  No name visible at all  →  verified=false
+  Name mismatch           →  verified=false
+  If Stage 1 already confirmed name → Haiku is told the answer, cannot override it
+```
+
+Haiku returns:
+```json
+{
+  "verified": true,
+  "note": "Medical bill from Metro General Hospital confirms Amara Osei as patient with $1,865 due.",
+  "key_details": "$1,865.00, 2026-01-15, Metro General Hospital",
+  "name_on_document": "Amara Osei",
+  "name_match": true
+}
+```
+
+**Stage 3 — Store and return**
+```
+document_store.upload()      → creates document record
+document_store.mark_verified() → sets verified=true/false + note
+Response returned to frontend with extraction_model + verified + note
+```
+
+---
+
+### What Azure DI and Haiku each do
+
+| | Azure DI | Haiku |
+|---|---|---|
+| **Job** | OCR + structured field extraction | Semantic reasoning |
+| **Output** | `vendor_name`, `customer_name`, `amount`, `date` — typed fields | `verified` bool + human-readable `note` |
+| **Name check** | Extracts name as a structured field | Finds name in raw text (fallback) |
+| **Context understanding** | None — just reads fields | Yes — understands "does this make sense for this expense?" |
+| **Runs for .txt?** | Never | Always |
+| **Runs for .pdf?** | Yes (primary) | Yes (after Azure DI) |
+| **LLM cost** | None | ~1 Haiku call per upload |
+
+---
+
+### Failure scenarios (what gets rejected and why)
+
+| Upload | Claimed as | Stage that catches it | Reason |
+|---|---|---|---|
+| Grocery receipt named "Amara Osei" | medical_bill | Haiku CHECK 1 | Missing required fields (no hospital, no date of service, no medical amount) |
+| Medical bill named "Amara Osei" | eviction_notice | Haiku CHECK 2 | Content doesn't support prevent_eviction expense type |
+| Amara's medical bill uploaded by Gabriel | medical_bill | Stage 1 (rule) | CustomerName "Amara Osei" ≠ participant "Gabriel Stone" — instant rejection |
+| Document with no name visible | medical_bill | Haiku CHECK 3 | No name found on document |
+| "Amara Chen" bill uploaded for Amara Osei | medical_bill | Stage 1 (rule) | Last names differ: "Chen" ≠ "Osei" |
+| Court order as medical_bill | medical_bill | Haiku CHECK 1 | Court order lacks patient name, hospital, date of service, medical amount |
+| Valid medical bill, correct name | medical_bill | All pass | `verified=true` |
+
+---
+
+## Tax & Penalty — How Money Flows by Transaction Type
+
+### Loan — $10,000
+
+| | Amount |
+|---|---|
+| You asked for | $10,000 |
+| Vested balance goes DOWN by | $10,000 |
+| You receive in your bank | **$10,000** (full amount) |
+| Taxes / penalty | **None** — it's a loan, you pay it back |
+
+**Loan is the cleanest.** You get exactly what you asked for, nothing withheld. You repay with interest over 5 years. If you default, THEN it becomes taxable income.
+
+---
+
+### Hardship Distribution — $10,000
+
+| | Amount |
+|---|---|
+| You asked for | $10,000 |
+| Vested balance goes DOWN by | **$10,000** (exactly this, nothing extra) |
+| IRS takes 20% mandatory withholding | $2,000 (from the $10k) |
+| You receive in your bank | **$8,000** |
+| 10% early withdrawal penalty | **$1,000 — you owe this at tax time** |
+
+**The penalty does NOT touch your vested balance.** The $10k is already gone from the account. The $1,000 penalty is a bill you settle when you file your taxes in April — it comes from your regular wallet/savings, not from the 401k. The IRS computes it on your 1040.
+
+---
+
+### Separation Distribution — $10,000 (under age 59½)
+
+Same as hardship:
+- Account loses $10,000
+- You receive $8,000
+- Owe $1,000 penalty at tax time
+
+If you're **age 59½ or older** when you separate:
+- Account loses $10,000
+- You receive $8,000 (still withheld 20%)
+- **No 10% penalty** — age exempts you
+
+---
+
+### RMD — $10,000
+
+| | Amount |
+|---|---|
+| Vested balance goes DOWN by | $10,000 |
+| 20% withholding | $2,000 |
+| You receive | $8,000 |
+| 10% penalty | **None** — you're 73+, exempt by age |
+
+---
+
+### Summary: Does the 10% penalty cut from the remaining vested balance?
+
+**No.** The flow is:
+
+```
+Vested balance:  $100,000
+You request:     $10,000
+After request:   $90,000   ← account balance now
+
+$10,000 split:
+  → $8,000 reaches your bank
+  → $2,000 sent to IRS (withholding)
+
+Tax filing (April):
+  → You owe $1,000 penalty (comes from your regular pocket, NOT from the $90,000)
+```
+
+The 401k account never sees the penalty. It only sees the $10,000 deduction. The penalty is settled outside the plan entirely.

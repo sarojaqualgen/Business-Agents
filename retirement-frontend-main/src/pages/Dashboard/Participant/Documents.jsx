@@ -67,7 +67,7 @@ function DocCard({ doc }) {
               {sponsorApproved && (
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-accent/12 text-accent border border-accent/25">
                   <svg viewBox="0 0 12 12" className="w-3 h-3 fill-current"><path d="M10 3L5 8.5 2 5.5l-.7.7 3.7 3.7L10.7 3.7z"/></svg>
-                  Sponsor Approved
+                  Administrator Approved
                 </span>
               )}
             </div>

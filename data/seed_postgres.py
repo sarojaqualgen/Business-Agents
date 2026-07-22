@@ -7,11 +7,12 @@ Plans
   PLAN-003  Capital One Financial Corporation Associate Savings Plan  (from SPD, effective Jan 1 2024)
   PLAN-004  The Prudential Employee Savings Plan (PESP)               (from SPD, 2023)
 
-Participants (4)
+Participants (5)
   PART-006  Gabriel Stone   — PLAN-003 Capital One, age 62, HCE, active employee
   PART-007  Yuki Tanaka     — PLAN-004 Prudential, age 31, 1.5yr service, cliff not yet met
   PART-008  Amara Osei      — PLAN-003 Capital One, age 36, primary demo participant
   PART-009  Daniela Reyes   — PLAN-003 Capital One, age 41, existing $25k loan
+  PART-010  Eleanor Walsh   — PLAN-003 Capital One, age 75, retired, rmd_required=True
 
 Run:
   python data/seed_postgres.py
@@ -393,6 +394,45 @@ PARTICIPANTS = [
             {"fund_id": "COF-LIFEPATH-2055", "allocation_pct": 0.70} if False else
             {"fund_id": "COF-LIFEPATH-2040", "allocation_pct": 0.70},
             {"fund_id": "COF-SP500", "allocation_pct": 0.30},
+        ],
+    },
+    {
+        # Capital One — age 75, retired 2016-03-10 (at NRA 65), rmd_required=True
+        # Used for: RMD happy path, RMD denial (amount below minimum)
+        # IRS Uniform Lifetime Table age 75 → distribution period 24.6
+        # RMD 2026 = $400,000 (prior year-end vested) / 24.6 = $16,260
+        "participant_id": "PART-010",
+        "plan_id": "PLAN-003",
+        "ssn_hash": _ssn_hash("FAKE-SSN-010"),
+        "first_name": "Eleanor",
+        "last_name": "Walsh",
+        "date_of_birth": "1951-03-10",            # age 75
+        "date_of_hire": "1980-01-15",
+        "eligibility_date": "1980-01-15",
+        "employment_status": "retired",
+        "termination_date": "2016-03-10",          # retired at NRA 65
+        "years_of_vesting_service": 36.0,
+        "hours_of_service_ytd": 0,                 # retired — no current hours
+        "break_in_service": False,
+        "userra_military_leave": False,
+        "total_balance": 415000.00,
+        "vested_balance": 400000.00,
+        "vesting_percentage": 1.0,
+        "employee_contributions_ytd": 0.00,        # retired — no active contributions
+        "employer_contributions_ytd": 0.00,
+        "current_deferral_pct": 0.00,
+        "deferral_type": "pre_tax",
+        "compensation_ytd": 0.00,
+        "is_hce": False,
+        "age_50_or_older": True,
+        "age_60_to_63": False,
+        "rmd_required": True,
+        "rmd_amount_current_year": 16260.00,       # $400k / 24.6 (IRS Uniform Lifetime Table, age 75)
+        "rmd_due_date": "2026-12-31",
+        "elections": [
+            {"fund_id": "COF-LIFEPATH-2025", "allocation_pct": 0.50},
+            {"fund_id": "COF-BOND",          "allocation_pct": 0.30},
+            {"fund_id": "COF-STABLE",        "allocation_pct": 0.20},
         ],
     },
     {
@@ -824,6 +864,7 @@ def main():
         print("  PART-007  Yuki Tanaka      — PLAN-004   $38k  age 31 / 1.5yr service / cliff not met")
         print("  PART-008  Amara Osei       — PLAN-003   $85k  age 36 / primary demo participant")
         print("  PART-009  Daniela Reyes    — PLAN-003  $100k  age 41 / existing $25k loan")
+        print("  PART-010  Eleanor Walsh    — PLAN-003  $400k  age 75 / retired / rmd_required=True")
         print()
         print("Funds:  12 Capital One (Fidelity)  +  9 Prudential PESP (Empower)")
         print("Loans:  LOAN-0100  Daniela Reyes — $25k active  (§72(p) cap demo)")

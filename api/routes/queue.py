@@ -17,9 +17,11 @@ from pydantic import BaseModel
 
 from api.auth import SessionToken, get_session
 from data import document_store as ds
+from data.db import get_participant_name as _get_participant_name
 from data.review_queue import (
     approve,
     approve_awaiting_bank,
+    cancel,
     deny,
     get_all,
     get_entry,
@@ -68,13 +70,14 @@ def list_queue(session: SessionToken = Depends(get_session)):
     _sponsor_only(session)
     rq_reload()
     ds.reload()
-    entries = get_all()          # return all statuses — UI filters client-side
+    entries = [e for e in get_all() if e.status != "cancelled"]  # cancelled = participant withdrew, no action needed
     return {
         "count": len(entries),
         "entries": [
             {
                 "entry_id":              e.entry_id,
                 "participant_id":        e.participant_id,
+                "participant_name":      _get_participant_name(e.participant_id) or e.participant_id,
                 "plan_id":               e.plan_id,
                 "action":                e.action,
                 "amount":                (e.payload or {}).get("amount"),
@@ -204,10 +207,78 @@ def approve_request(
             "message":  "Approved. Participant must now provide bank details via POST /transactions/disburse to receive funds.",
         }
 
+    # QDRO: execute the balance split immediately at sponsor approval.
+    # The FAP already approved this when the participant submitted — the sponsor's
+    # approval of the court order is the execution trigger. No bank details needed:
+    # the alternate payee's share moves to a separate recordkeeper account (Fidelity),
+    # not to a participant bank account. We bypass token re-validation here because
+    # the 24-hour JWT TTL is shorter than the typical court-order review window.
+    if entry.action == "qdro":
+        try:
+            from decimal import Decimal
+            from data import db as _db
+            from data.db import get_participant as _get_p
+            p = _get_p(entry.participant_id)
+            transfer_pct = Decimal(str((entry.payload or {}).get("transfer_pct", 50))) / 100
+            amount = (p.vested_balance * transfer_pct) if p else Decimal("0")
+            if amount > 0:
+                _db.decrement_vested_balance(participant_id=entry.participant_id, amount=amount)
+            _db.record_transaction(
+                participant_id=entry.participant_id,
+                plan_id=entry.plan_id,
+                action="qdro",
+                amount=amount,
+                payload=entry.payload,
+                autonomy_level="human_review",
+                queue_entry_id=entry_id,
+            )
+        except Exception as exc:
+            raise HTTPException(500, f"Failed to execute QDRO balance split: {exc}")
+
     result = approve(entry_id, sponsor_note=body.note or "", resolved_at=now)
     if not result:
         raise HTTPException(500, "Failed to approve entry")
+
+    if entry.action == "qdro":
+        transfer_pct = (entry.payload or {}).get("transfer_pct", 50)
+        payee = (entry.payload or {}).get("alternate_payee_name", "alternate payee")
+        return {
+            "status":   "approved",
+            "entry_id": entry_id,
+            "message":  (
+                f"QDRO approved. {transfer_pct}% of the participant's vested balance has been "
+                f"allocated to {payee}. The recordkeeper (Fidelity) will create a separate "
+                f"account for the alternate payee and notify them directly."
+            ),
+        }
+
     return {"status": "approved", "entry_id": entry_id}
+
+
+@router.post("/{entry_id}/cancel")
+def cancel_request(
+    entry_id: str,
+    session: SessionToken = Depends(get_session),
+):
+    """Participant cancels their own pending request after document verification failure."""
+    if session.principal_type not in ("participant", "participant_delegate"):
+        raise HTTPException(403, "Only participants can cancel their own requests")
+
+    entry = get_entry(entry_id)
+    if not entry:
+        raise HTTPException(404, f"Queue entry '{entry_id}' not found")
+
+    if entry.participant_id != session.participant_id:
+        raise HTTPException(403, "You can only cancel your own requests")
+
+    if entry.status != "pending":
+        return {"status": entry.status, "entry_id": entry_id}  # already resolved — no-op
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    result = cancel(entry_id, note="Cancelled — document did not pass verification", resolved_at=now)
+    if not result or result.status != "cancelled":
+        raise HTTPException(500, "Failed to cancel entry — please try again")
+    return {"status": "cancelled", "entry_id": entry_id}
 
 
 @router.post("/{entry_id}/deny")

@@ -28,10 +28,11 @@ export default function AuditLog() {
       const res = await apiClient.getAuditLog();
       const raw = res.records || res.entries || [];
       setEntries(raw.map((r) => ({
-        id:             r.audit_id || r.id,
-        timestamp:      r.timestamp,
-        participant_id: r.participant_id,
-        plan_id:        r.plan_id,
+        id:               r.audit_id || r.id,
+        timestamp:        r.timestamp,
+        participant_id:   r.participant_id,
+        participant_name: r.participant_name || r.participant_id,
+        plan_id:          r.plan_id,
         action:         r.action,
         result:         r.authorized != null
           ? (r.authorized ? 'approved' : 'denied')

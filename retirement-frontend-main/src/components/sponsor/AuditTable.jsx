@@ -55,7 +55,7 @@ export default function AuditTable({ entries, sortKey, sortDir, onSort }) {
           {entries.map((entry) => (
             <tr key={entry.id} className="border-b border-border/60 hover:bg-bg-s2/40">
               <td className="py-2.5 pr-4 text-text-muted whitespace-nowrap">{formatDate(entry.timestamp)}</td>
-              <td className="py-2.5 pr-4 font-mono">{entry.participant_id || '—'}</td>
+              <td className="py-2.5 pr-4">{entry.participant_name || entry.participant_id || '—'}</td>
               <td className="py-2.5 pr-4 font-mono text-text-muted">{entry.plan_id}</td>
               <td className="py-2.5 pr-4">{titleCase(entry.action)}</td>
               <td className="py-2.5 pr-4">

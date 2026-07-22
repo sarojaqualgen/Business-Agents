@@ -122,7 +122,7 @@ function DocsModal({ entry, onClose, onDocApproved }) {
                   )}
                   {doc.sponsor_doc_approved && (
                     <span className="text-[11px] px-2 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/30 font-medium">
-                      Sponsor ✓
+                      Admin ✓
                     </span>
                   )}
                 </div>

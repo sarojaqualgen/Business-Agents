@@ -191,7 +191,7 @@ export default function Activity() {
   const [activities, setActivities] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filter, setFilter] = useState('all');
-  const [bankFormOpen, setBankFormOpen] = useState(null); // entry_id of open form
+  const [bankFormOpen, setBankFormOpen] = useState(null);
 
   const load = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setIsLoading(true);
@@ -323,6 +323,7 @@ export default function Activity() {
                     )}
 
                     <p className="text-[11px] text-text-faint mt-2">{formatTimestamp(item.timestamp)}</p>
+
 
                     {/* Bank details CTA */}
                     {isAwaitingBank && !bankOpen && (

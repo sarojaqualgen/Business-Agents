@@ -406,9 +406,13 @@ def _execute_write(participant_id: str, plan_id: str, action: str, payload: dict
         )
 
     elif action == "rmd":
-        from data.db import get_participant as _get_p
-        p = _get_p(participant_id)
-        amount = Decimal(str(p.rmd_amount_current_year)) if (p and p.rmd_amount_current_year) else Decimal("0")
+        payload_amount = payload.get("amount")
+        if payload_amount is not None:
+            amount = Decimal(str(payload_amount))
+        else:
+            from data.db import get_participant as _get_p
+            p = _get_p(participant_id)
+            amount = Decimal(str(p.rmd_amount_current_year)) if (p and p.rmd_amount_current_year) else Decimal("0")
         if amount > 0:
             db.decrement_vested_balance(participant_id=participant_id, amount=amount)
         db.record_transaction(

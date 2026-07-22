@@ -94,7 +94,7 @@ export default function ParticipantDashboard() {
             <ActionGuidePage
               icon={<HardshipIcon />}
               title="Hardship Withdrawal"
-              description="Withdraw funds while still employed for a qualifying IRS safe-harbor hardship expense. Subject to ordinary income tax and a 10% early withdrawal penalty under IRC §72(t) if under age 59½. Supporting documentation is required; the plan sponsor must review before funds are released."
+              description="Withdraw funds while still employed for a qualifying IRS safe-harbor hardship expense. Subject to ordinary income tax and a 10% early withdrawal penalty under IRC §72(t) if under age 59½. Supporting documentation is required; the plan administrator must review before funds are released."
               citation="IRC §401(k)(2)(B)(i)(IV) · Treas. Reg. §1.401(k)-1(d)(3)"
               fields={[
                 { label: 'Amount', hint: 'must not exceed the actual hardship need', required: true },

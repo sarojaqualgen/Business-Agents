@@ -54,7 +54,7 @@ function ShieldCheckIcon() {
 
 const ROLES = [
   { value: 'participant',  label: 'Employee',      sub: 'Participant',  desc: 'View your account, request loans, change contributions', Icon: PersonIcon },
-  { value: 'plan_sponsor', label: 'Administrator', sub: 'Plan Sponsor', desc: 'Manage the plan, approve requests, view the audit log',  Icon: BuildingIcon },
+  { value: 'plan_sponsor', label: 'Administrator', sub: 'Plan Administrator', desc: 'Manage the plan, approve requests, view the audit log',  Icon: BuildingIcon },
 ];
 
 const PANEL_BG       = '#0C0E14';

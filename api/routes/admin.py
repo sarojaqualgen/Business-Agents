@@ -1,9 +1,11 @@
 """
-Admin endpoints — plan sponsors only.
+Admin endpoints — plan administrators only.
 
-GET  /admin/audit        — FAP audit log (all compliance decisions)
-POST /admin/blackout     — activate or lift a blackout (structured)
-POST /admin/reset        — wipe all transient demo state
+GET  /admin/audit                               — FAP audit log (all compliance decisions)
+GET  /admin/participants                        — all participants in the administrator's plan
+GET  /admin/participants/{participant_id}/activity — full activity timeline for one participant
+POST /admin/blackout                            — activate or lift a blackout (structured)
+POST /admin/reset                               — wipe all transient demo state
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,6 +29,7 @@ def _sponsor_only(session: SessionToken) -> None:
 def audit_log(session: SessionToken = Depends(get_session)):
     _sponsor_only(session)
     records = get_all_audit_records()
+    from data.db import get_participant_name as _gpn
     return {
         "count": len(records),
         "note":  "Audit log stored in PostgreSQL fap_audit_log (falls back to in-memory if DB unavailable).",
@@ -36,6 +39,7 @@ def audit_log(session: SessionToken = Depends(get_session)):
                 "timestamp":          r.timestamp,
                 "agent_id":           r.agent_id,
                 "participant_id":     r.participant_id,
+                "participant_name":   _gpn(r.participant_id) or r.participant_id,
                 "plan_id":            r.plan_id,
                 "action":             r.action,
                 "authorized":         r.authorized,
@@ -47,6 +51,55 @@ def audit_log(session: SessionToken = Depends(get_session)):
             }
             for r in records
         ],
+    }
+
+
+@router.get("/activity")
+def plan_activity(session: SessionToken = Depends(get_session)):
+    """Return the combined activity feed for all participants in the plan, newest first."""
+    _sponsor_only(session)
+    plan_id = session.plan_id
+    if not plan_id:
+        raise HTTPException(400, "No plan in session.")
+    from data import db as _db
+    events = _db.get_plan_activity(plan_id)
+    return {"plan_id": plan_id, "event_count": len(events), "events": events}
+
+
+@router.get("/participants")
+def list_participants(session: SessionToken = Depends(get_session)):
+    """Return all participants enrolled in the administrator's plan."""
+    _sponsor_only(session)
+    plan_id = session.plan_id
+    if not plan_id:
+        raise HTTPException(400, "No plan in session.")
+    from data import db as _db
+    participants = _db.get_plan_participants(plan_id)
+    return {"plan_id": plan_id, "count": len(participants), "participants": participants}
+
+
+@router.get("/participants/{participant_id}/activity")
+def participant_activity(participant_id: str, session: SessionToken = Depends(get_session)):
+    """Return the full activity timeline for one participant (transactions + loans + FAP decisions)."""
+    _sponsor_only(session)
+    from data import db as _db
+    # Verify participant belongs to admin's plan
+    p = _db.get_participant(participant_id)
+    if not p:
+        raise HTTPException(404, f"Participant '{participant_id}' not found.")
+    if session.plan_id and p.plan_id != session.plan_id:
+        raise HTTPException(403, "Participant is not in your plan.")
+    from data.db import get_participant_name
+    name = get_participant_name(participant_id) or participant_id
+    events = _db.get_participant_activity(participant_id)
+    return {
+        "participant_id":    participant_id,
+        "name":              name,
+        "employment_status": p.employment_status,
+        "vested_balance":    float(p.vested_balance),
+        "total_balance":     float(p.total_balance),
+        "event_count":       len(events),
+        "events":            events,
     }
 
 
@@ -132,21 +185,32 @@ def reset_demo(session: SessionToken = Depends(get_session)):
                 ON CONFLICT (loan_id) DO NOTHING
             """)
 
-            # Restore all participant balances and deferral rates to seeded values
+            # Restore ALL participant fields to seeded values (everything FAP reads)
             seeded_participants = [
-                ("PART-006", 225000.00, 210000.00, 0.10, "pre_tax"),
-                ("PART-007",  42000.00,  38000.00, 0.04, "pre_tax"),
-                ("PART-008",  92000.00,  85000.00, 0.06, "pre_tax"),
-                ("PART-009", 105000.00, 100000.00, 0.08, "pre_tax"),
+                # pid, total, vested, deferral_pct, d_type, emp_ytd, er_ytd, comp_ytd, emp_status
+                ("PART-006", 225000.00, 210000.00, 0.10, "pre_tax", 23000.00, 10350.00, 185000.00, "active"),
+                ("PART-007",  42000.00,  38000.00, 0.04, "pre_tax",  6800.00,  2240.00,  95000.00, "active"),
+                ("PART-008",  92000.00,  85000.00, 0.06, "pre_tax",  8000.00,  5060.00, 110000.00, "active"),
+                ("PART-009", 105000.00, 100000.00, 0.08, "pre_tax", 12000.00,  7200.00, 128000.00, "terminated"),
+                ("PART-010", 415000.00, 400000.00, 0.00, "pre_tax",     0.00,     0.00,      0.00, "retired"),
             ]
-            for pid, total, vested, deferral, d_type in seeded_participants:
+            for pid, total, vested, deferral, d_type, emp_ytd, er_ytd, comp_ytd, emp_status in seeded_participants:
                 cur.execute(
                     """UPDATE participants
-                       SET total_balance = %s, vested_balance = %s,
-                           current_deferral_pct = %s, deferral_type = %s
+                       SET total_balance = %s,
+                           vested_balance = %s,
+                           current_deferral_pct = %s,
+                           deferral_type = %s,
+                           employee_contributions_ytd = %s,
+                           employer_contributions_ytd = %s,
+                           compensation_ytd = %s,
+                           employment_status = %s
                        WHERE participant_id = %s""",
-                    (total, vested, deferral, d_type, pid),
+                    (total, vested, deferral, d_type, emp_ytd, er_ytd, comp_ytd, emp_status, pid),
                 )
+
+            # Clear documents table
+            cur.execute("TRUNCATE TABLE documents CASCADE")
 
             # Restore investment elections to seeded values
             cur.execute("TRUNCATE TABLE participant_investment_elections CASCADE")
@@ -159,6 +223,9 @@ def reset_demo(session: SessionToken = Depends(get_session)):
                 ("PART-008", "PLAN-003", "COF-SP500",         0.30),
                 ("PART-009", "PLAN-003", "COF-SP500",         0.70),
                 ("PART-009", "PLAN-003", "COF-STABLE",        0.30),
+                ("PART-010", "PLAN-003", "COF-LIFEPATH-2025", 0.50),
+                ("PART-010", "PLAN-003", "COF-BOND",          0.30),
+                ("PART-010", "PLAN-003", "COF-STABLE",        0.20),
             ]
             for pid, plan_id, fund_id, pct in seeded_elections:
                 cur.execute(
@@ -168,7 +235,7 @@ def reset_demo(session: SessionToken = Depends(get_session)):
                     (pid, plan_id, fund_id, pct),
                 )
 
-        report["postgres"] = "truncated; balances, deferral rates, and elections restored; LOAN-0100 restored"
+        report["postgres"] = "truncated; all participant fields, elections, and documents restored to seed; LOAN-0100 restored"
     except Exception as e:
         report["postgres"] = f"error: {e}"
 
